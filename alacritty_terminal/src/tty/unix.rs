@@ -132,26 +132,26 @@ impl ShellUser {
 
         let user = match env::var("USER") {
             Ok(user) => user,
-            Err(_) => match pw {
-                Ok(ref pw) => pw.name.to_owned(),
-                Err(err) => return Err(err),
-            },
+            Err(_) => pw
+                .as_ref()
+                .map(|pw| pw.name.to_owned())
+                .map_err(|err| Error::new(err.kind(), err.to_string()))?,
         };
 
         let home = match env::var("HOME") {
             Ok(home) => home,
-            Err(_) => match pw {
-                Ok(ref pw) => pw.dir.to_owned(),
-                Err(err) => return Err(err),
-            },
+            Err(_) => pw
+                .as_ref()
+                .map(|pw| pw.dir.to_owned())
+                .map_err(|err| Error::new(err.kind(), err.to_string()))?,
         };
 
         let shell = match env::var("SHELL") {
             Ok(shell) => shell,
-            Err(_) => match pw {
-                Ok(ref pw) => pw.shell.to_owned(),
-                Err(err) => return Err(err),
-            },
+            Err(_) => pw
+                .as_ref()
+                .map(|pw| pw.shell.to_owned())
+                .map_err(|err| Error::new(err.kind(), err.to_string()))?,
         };
 
         Ok(Self { user, home, shell })
