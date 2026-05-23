@@ -254,6 +254,54 @@ This section documents the *[window]* table of the configuration file.
 
 		Default: _"Hover"_
 
+	*title_template* = _"<string>"_
+
+		Template used for tab titles when no active/inactive-specific template is set.
+
+		The supported placeholders are _{index}_, _{zero\_index}_, _{title}_,
+		_{activity}_, _{bell}_, _{program}_, _{cwd}_, and _{modified}_.
+		_{program}_, _{cwd}_, and _{modified}_ are currently reserved and expand
+		to an empty string.
+		When any title template is configured, _show\_index_ is ignored and indices
+		must be included with _{index}_ or _{zero\_index}_.
+		When a template contains _{activity}_ or _{bell}_, indicator placement is
+		controlled by the template.
+
+		Default: unset
+
+	*active_title_template* = _"<string>"_
+
+		Template used for the active tab title.
+
+		Default: unset
+
+	*inactive_title_template* = _"<string>"_
+
+		Template used for inactive tab titles.
+
+		Default: unset
+
+	*activity_indicator* = _"<string>"_
+
+		Indicator displayed for inactive tabs with unread activity.
+
+		Default: _"•"_
+
+	*bell_indicator* = _"<string>"_
+
+		Indicator displayed for inactive tabs with bell activity.
+
+		Default: _"!"_
+
+	*show_activity_indicator* = _true_ | _false_
+
+		Show activity and bell indicators in inactive tab titles.
+
+		Default: _true_
+
+	When the tab bar overflows, hidden tabs are indicated with _…_ and the active
+	tab is kept visible when possible.
+
 Example:
 	*[window]*++
 padding = { x = _3_, y = _3_ }++
@@ -1022,14 +1070,13 @@ _https://docs.rs/winit/latest/winit/keyboard/enum.Key.html#variant.Dead_
 		*SearchHistoryNext*
 			Go to the next regex in the search history.
 
-		_macOS exclusive:_
+		_Tab actions:_
 
-		*ToggleSimpleFullscreen*
-			Enter fullscreen without occupying another space.
-		*HideOtherApplications*
-			Hide all windows other than Alacritty.
 		*CreateNewTab*
-			Create new window in a tab.
+			Create a new tab.
+		*CloseTab*
+			Close the active tab. On non-macOS platforms, this closes the window when
+			the active tab is the only tab.
 		*SelectNextTab*
 			Select next tab.
 		*SelectPreviousTab*
@@ -1054,6 +1101,17 @@ _https://docs.rs/winit/latest/winit/keyboard/enum.Key.html#variant.Dead_
 			Select the ninth tab.
 		*SelectLastTab*
 			Select the last tab.
+		*MoveTabLeft*
+			Move the active tab one slot left. _(non-macOS only)_
+		*MoveTabRight*
+			Move the active tab one slot right. _(non-macOS only)_
+
+		_macOS exclusive:_
+
+		*ToggleSimpleFullscreen*
+			Enter fullscreen without occupying another space.
+		*HideOtherApplications*
+			Hide all windows other than Alacritty.
 
 		_Linux/BSD exclusive:_
 

@@ -18,6 +18,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 - Internal tabs with a configurable bottom tab bar on non-macOS platforms
 - IPC commands for creating, listing, selecting, closing, and moving tabs
+- Tab title templates, activity indicators, overflow markers, and move-left/right actions
 
 ### Fixed
 
