@@ -21,6 +21,7 @@ pub struct Colors {
     pub transparent_background_colors: bool,
     pub draw_bold_text_with_bright_colors: bool,
     footer_bar: BarColors,
+    pub tab_bar: TabBarColors,
 }
 
 impl Colors {
@@ -30,6 +31,22 @@ impl Colors {
 
     pub fn footer_bar_background(&self) -> Rgb {
         self.footer_bar.background.unwrap_or(self.primary.foreground)
+    }
+
+    pub fn tab_bar_active_foreground(&self) -> Rgb {
+        self.tab_bar.active.foreground.unwrap_or(self.primary.foreground)
+    }
+
+    pub fn tab_bar_active_background(&self) -> Rgb {
+        self.tab_bar.active.background.unwrap_or(self.primary.background)
+    }
+
+    pub fn tab_bar_inactive_foreground(&self) -> Rgb {
+        self.tab_bar.inactive.foreground.unwrap_or_else(|| self.footer_bar_foreground())
+    }
+
+    pub fn tab_bar_inactive_background(&self) -> Rgb {
+        self.tab_bar.inactive.background.unwrap_or_else(|| self.footer_bar_background())
     }
 }
 
@@ -167,6 +184,18 @@ pub struct BarColors {
     background: Option<Rgb>,
 }
 
+#[derive(ConfigDeserialize, Serialize, Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TabBarColors {
+    pub active: TabBarStateColors,
+    pub inactive: TabBarStateColors,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TabBarStateColors {
+    pub foreground: Option<Rgb>,
+    pub background: Option<Rgb>,
+}
+
 #[derive(ConfigDeserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PrimaryColors {
     pub foreground: Rgb,
@@ -240,6 +269,46 @@ impl Default for BrightColors {
             cyan: Rgb::new(0x93, 0xd3, 0xc3),
             white: Rgb::new(0xf8, 0xf8, 0xf8),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::UiConfig;
+
+    #[test]
+    fn tab_bar_defaults() {
+        let colors = Colors::default();
+
+        assert_eq!(colors.tab_bar_active_foreground(), colors.primary.foreground);
+        assert_eq!(colors.tab_bar_active_background(), colors.primary.background);
+        assert_eq!(colors.tab_bar_inactive_foreground(), colors.footer_bar_foreground());
+        assert_eq!(colors.tab_bar_inactive_background(), colors.footer_bar_background());
+    }
+
+    #[test]
+    fn tab_bar_colors_parse() {
+        let config = toml::from_str::<UiConfig>(concat!(
+            "[colors.tab_bar.active]\n",
+            "foreground = \"#010203\"\n",
+            "background = \"#040506\"\n\n",
+            "[colors.tab_bar.inactive]\n",
+            "foreground = \"#070809\"\n",
+            "background = \"#0a0b0c\"\n",
+        ))
+        .unwrap();
+
+        assert_eq!(config.colors.tab_bar.active.foreground, Some(Rgb::new(0x01, 0x02, 0x03)));
+        assert_eq!(config.colors.tab_bar.active.background, Some(Rgb::new(0x04, 0x05, 0x06)));
+        assert_eq!(config.colors.tab_bar.inactive.foreground, Some(Rgb::new(0x07, 0x08, 0x09)));
+        assert_eq!(config.colors.tab_bar.inactive.background, Some(Rgb::new(0x0a, 0x0b, 0x0c)));
+    }
+
+    #[test]
+    fn invalid_tab_bar_color_parse() {
+        assert!(toml::from_str::<Rgb>("\"not-a-color\"").is_err());
     }
 }
 

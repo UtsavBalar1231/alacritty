@@ -354,11 +354,9 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.close_window();
             },
             #[cfg(not(target_os = "macos"))]
-            Action::CloseTab => {
-                if !ctx.close_tab() {
-                    ctx.window().hold = false;
-                    ctx.terminal_mut().exit();
-                }
+            Action::CloseTab if !ctx.close_tab() => {
+                ctx.window().hold = false;
+                ctx.terminal_mut().exit();
             },
             Action::IncreaseFontSize => ctx.change_font_size(FONT_SIZE_STEP),
             Action::DecreaseFontSize => ctx.change_font_size(-FONT_SIZE_STEP),

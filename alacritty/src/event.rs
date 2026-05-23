@@ -45,7 +45,9 @@ use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 use alacritty_terminal::vte::ansi::NamedColor;
 
 #[cfg(unix)]
-use crate::cli::{IpcConfig, ParsedOptions};
+use crate::cli::{
+    IpcConfig, ParsedOptions, TabCreate, TabMove, TabSelect, TabTarget, TabWindowTarget,
+};
 use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::ui_config::{HintAction, HintInternalAction};
@@ -61,9 +63,9 @@ use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
 use crate::logging::{LOG_TARGET_CONFIG, LOG_TARGET_WINIT};
 use crate::message_bar::{Message, MessageBuffer};
 #[cfg(unix)]
-use crate::polling::ipc::{self, SocketReply};
+use crate::polling::ipc::{self, IpcError, SocketReply};
 use crate::scheduler::{Scheduler, TimerId, Topic};
-use crate::tabs::{TabId, TabSelection, TerminalId};
+use crate::tabs::{SessionIds, TabError, TabId, TabSelection, TerminalId};
 use crate::window_context::WindowContext;
 
 /// Duration after the last user input until an unlimited search is performed.
@@ -158,14 +160,13 @@ impl Processor {
         event_loop: &ActiveEventLoop,
         window_options: WindowOptions,
     ) -> Result<(), Box<dyn Error>> {
-        let (tab_id, terminal_id) = self.next_session_ids();
+        let session_ids = self.next_session_ids();
         let window_context = WindowContext::initial(
             event_loop,
             self.proxy.clone(),
             self.config.clone(),
             window_options,
-            tab_id,
-            terminal_id,
+            session_ids,
         )?;
 
         self.gl_config = Some(window_context.display.gl_context().config());
@@ -180,7 +181,7 @@ impl Processor {
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
     ) -> Result<(), Box<dyn Error>> {
-        let (tab_id, terminal_id) = self.next_session_ids();
+        let session_ids = self.next_session_ids();
         let gl_config = self.gl_config.as_ref().unwrap();
 
         // Override config with CLI/IPC options.
@@ -197,8 +198,7 @@ impl Processor {
             config,
             options,
             config_overrides,
-            tab_id,
-            terminal_id,
+            session_ids,
         )?;
 
         self.windows.insert(window_context.id(), window_context);
@@ -237,15 +237,234 @@ impl Processor {
         )
     }
 
-    fn next_session_ids(&mut self) -> (TabId, TerminalId) {
+    fn next_session_ids(&mut self) -> SessionIds {
         let tab_id = TabId::new(self.next_tab_id);
         let terminal_id = TerminalId::new(self.next_terminal_id);
 
         self.next_tab_id += 1;
         self.next_terminal_id += 1;
 
-        (tab_id, terminal_id)
+        SessionIds::new(tab_id, terminal_id)
     }
+
+    #[cfg(unix)]
+    fn handle_ipc_tab_request(&mut self, request: IpcTabRequest, stream: Arc<UnixStream>) {
+        let reply = self.ipc_tab_reply(request);
+        if let Ok(mut stream) = stream.try_clone() {
+            ipc::send_reply(&mut stream, reply);
+        }
+    }
+
+    #[cfg(unix)]
+    fn ipc_tab_reply(&mut self, request: IpcTabRequest) -> SocketReply {
+        if cfg!(target_os = "macos") {
+            return ipc_error("unsupported", "internal tab IPC is not supported on macOS");
+        }
+
+        match request {
+            IpcTabRequest::Create(create) => self.ipc_create_tab(create),
+            IpcTabRequest::List(target) => self.ipc_list_tabs(&target),
+            IpcTabRequest::Select(select) => self.ipc_select_tab(&select),
+            IpcTabRequest::Close(select) => self.ipc_close_tab(&select),
+            IpcTabRequest::Move(tab_move) => self.ipc_move_tab(&tab_move),
+        }
+    }
+
+    #[cfg(unix)]
+    fn ipc_create_tab(&mut self, create: TabCreate) -> SocketReply {
+        let window_id = match self.resolve_ipc_window(&create.window) {
+            Ok(window_id) => window_id,
+            Err(err) => return SocketReply::Error(err),
+        };
+
+        let session_ids = self.next_session_ids();
+        let window_context = match self.windows.get_mut(&window_id) {
+            Some(window_context) => window_context,
+            None => return ipc_error("unknown_window", "window does not exist"),
+        };
+
+        if let Err(err) =
+            window_context.create_tab(create.window_options, self.proxy.clone(), session_ids)
+        {
+            return ipc_error("create_failed", err.to_string());
+        }
+
+        window_context.request_redraw();
+        window_context
+            .active_tab_info()
+            .map(SocketReply::TabCreated)
+            .unwrap_or_else(|| ipc_error("empty", "window has no active tab"))
+    }
+
+    #[cfg(unix)]
+    fn ipc_list_tabs(&self, target: &TabWindowTarget) -> SocketReply {
+        let window_id = match self.resolve_ipc_window(target) {
+            Ok(window_id) => window_id,
+            Err(err) => return SocketReply::Error(err),
+        };
+
+        match self.windows.get(&window_id) {
+            Some(window_context) => SocketReply::Tabs(window_context.tab_infos()),
+            None => ipc_error("unknown_window", "window does not exist"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn ipc_select_tab(&mut self, select: &TabSelect) -> SocketReply {
+        let window_id = match self.resolve_ipc_window(&select.window) {
+            Ok(window_id) => window_id,
+            Err(err) => return SocketReply::Error(err),
+        };
+        let selection = match ipc_tab_selection(select.selector.target()) {
+            Ok(selection) => selection,
+            Err(err) => return SocketReply::Error(err),
+        };
+
+        let window_context = match self.windows.get_mut(&window_id) {
+            Some(window_context) => window_context,
+            None => return ipc_error("unknown_window", "window does not exist"),
+        };
+
+        match window_context.try_select_tab(selection) {
+            Ok(()) => {
+                window_context.request_redraw();
+                SocketReply::Ok
+            },
+            Err(err) => SocketReply::Error(ipc_tab_error(err)),
+        }
+    }
+
+    #[cfg(unix)]
+    fn ipc_close_tab(&mut self, select: &TabSelect) -> SocketReply {
+        let window_id = match self.resolve_ipc_window(&select.window) {
+            Ok(window_id) => window_id,
+            Err(err) => return SocketReply::Error(err),
+        };
+        let selection = match ipc_tab_selection(select.selector.target()) {
+            Ok(selection) => selection,
+            Err(err) => return SocketReply::Error(err),
+        };
+
+        let window_context = match self.windows.get_mut(&window_id) {
+            Some(window_context) => window_context,
+            None => return ipc_error("unknown_window", "window does not exist"),
+        };
+
+        let tab_id = match window_context.selected_tab_id(selection) {
+            Ok(tab_id) => tab_id,
+            Err(err) => return SocketReply::Error(ipc_tab_error(err)),
+        };
+
+        if window_context.tab_count() <= 1 {
+            window_context.close_window();
+        } else if window_context.close_tab(tab_id) {
+            window_context.request_redraw();
+        }
+
+        SocketReply::Ok
+    }
+
+    #[cfg(unix)]
+    fn ipc_move_tab(&mut self, tab_move: &TabMove) -> SocketReply {
+        let window_id = match self.resolve_ipc_window(&tab_move.window) {
+            Ok(window_id) => window_id,
+            Err(err) => return SocketReply::Error(err),
+        };
+        let selection = match ipc_tab_selection(tab_move.selector.target()) {
+            Ok(selection) => selection,
+            Err(err) => return SocketReply::Error(err),
+        };
+        let index = match usize::try_from(tab_move.destination_index) {
+            Ok(index) => index,
+            Err(_) => return ipc_error("invalid_index", "destination index is too large"),
+        };
+
+        let window_context = match self.windows.get_mut(&window_id) {
+            Some(window_context) => window_context,
+            None => return ipc_error("unknown_window", "window does not exist"),
+        };
+
+        match window_context.move_tab(selection, index) {
+            Ok(_) => {
+                window_context.request_redraw();
+                SocketReply::Ok
+            },
+            Err(err) => SocketReply::Error(ipc_tab_error(err)),
+        }
+    }
+
+    #[cfg(unix)]
+    fn resolve_ipc_window(&self, target: &TabWindowTarget) -> Result<WindowId, IpcError> {
+        match target.window_id {
+            Some(id) if id >= 0 => {
+                let id = u64::try_from(id)
+                    .map_err(|_| ipc_error_value("invalid_window", "window id is too large"))?;
+                let window_id = WindowId::from(id);
+                if self.windows.contains_key(&window_id) {
+                    Ok(window_id)
+                } else {
+                    Err(ipc_error_value("unknown_window", "window does not exist"))
+                }
+            },
+            Some(-1) | None => self.active_ipc_window().ok_or_else(|| {
+                ipc_error_value("unknown_window", "no active window could be resolved")
+            }),
+            Some(_) => {
+                Err(ipc_error_value("invalid_window", "window id must be -1 or non-negative"))
+            },
+        }
+    }
+
+    #[cfg(unix)]
+    fn active_ipc_window(&self) -> Option<WindowId> {
+        if self.windows.len() == 1 {
+            return self.windows.keys().next().copied();
+        }
+
+        self.windows.iter().find(|(_, window)| window.is_focused()).map(|(id, _)| *id)
+    }
+}
+
+#[cfg(unix)]
+fn ipc_tab_selection(target: TabTarget) -> Result<TabSelection, IpcError> {
+    match target {
+        TabTarget::Id(id) => Ok(TabSelection::Id(TabId::new(id))),
+        TabTarget::Index(index) => usize::try_from(index)
+            .map(TabSelection::Index)
+            .map_err(|_| ipc_error_value("invalid_index", "tab index is too large")),
+        TabTarget::Active => Ok(TabSelection::Active),
+        TabTarget::Next => Ok(TabSelection::Next),
+        TabTarget::Previous => Ok(TabSelection::Previous),
+        TabTarget::First => Ok(TabSelection::First),
+        TabTarget::Last => Ok(TabSelection::Last),
+    }
+}
+
+#[cfg(unix)]
+fn ipc_tab_error(error: TabError) -> IpcError {
+    match error {
+        TabError::Empty => ipc_error_value("empty", "window has no tabs"),
+        TabError::UnknownTab(tab_id) => {
+            ipc_error_value("unknown_tab", format!("unknown tab {}", tab_id.as_u64()))
+        },
+        TabError::InvalidIndex { index, len } => ipc_error_value(
+            "invalid_index",
+            format!("tab index {index} is outside available range 0..{len}"),
+        ),
+        TabError::DuplicateTabId(tab_id) => {
+            ipc_error_value("duplicate_tab", format!("duplicate tab {}", tab_id.as_u64()))
+        },
+    }
+}
+
+#[cfg(unix)]
+fn ipc_error(code: impl Into<String>, message: impl Into<String>) -> SocketReply {
+    SocketReply::Error(ipc_error_value(code, message))
+}
+
+#[cfg(unix)]
+fn ipc_error_value(code: impl Into<String>, message: impl Into<String>) -> IpcError {
+    IpcError { code: code.into(), message: message.into() }
 }
 
 impl ApplicationHandler<Event> for Processor {
@@ -311,6 +530,63 @@ impl ApplicationHandler<Event> for Processor {
         let tab_id = event.tab_id;
         let terminal_id = event.terminal_id;
 
+        if let (EventType::Terminal(terminal_event), Some(window_id)) =
+            (&event.payload, event.window_id)
+        {
+            let Some(window_context) = self.windows.get_mut(&window_id) else {
+                return;
+            };
+            if !window_context.terminal_event_target_valid(tab_id, terminal_id) {
+                return;
+            }
+
+            match terminal_event {
+                TerminalEvent::Title(title) => {
+                    let active = window_context.is_active_tab(tab_id);
+                    if !window_context.update_terminal_title(
+                        tab_id,
+                        terminal_id,
+                        Some(title.clone()),
+                    ) || !active
+                    {
+                        return;
+                    }
+                },
+                TerminalEvent::ResetTitle => {
+                    let active = window_context.is_active_tab(tab_id);
+                    if !window_context.update_terminal_title(tab_id, terminal_id, None) || !active {
+                        return;
+                    }
+                },
+                TerminalEvent::Bell
+                | TerminalEvent::ClipboardStore(..)
+                | TerminalEvent::ClipboardLoad(..)
+                | TerminalEvent::ColorRequest(..)
+                | TerminalEvent::TextAreaSizeRequest(_)
+                | TerminalEvent::PtyWrite(_)
+                | TerminalEvent::Wakeup => {
+                    if !window_context.is_active_tab(tab_id) {
+                        let handled = window_context.handle_terminal_event(
+                            tab_id,
+                            terminal_id,
+                            terminal_event.clone(),
+                            &mut self.clipboard,
+                            &mut self.scheduler,
+                        );
+                        if handled {
+                            return;
+                        }
+                    }
+                },
+                TerminalEvent::MouseCursorDirty | TerminalEvent::CursorBlinkingChange => {
+                    if !window_context.is_active_tab(tab_id) {
+                        return;
+                    }
+                },
+                TerminalEvent::Exit | TerminalEvent::ChildExit(_) => {},
+            }
+        }
+
         // Handle events which don't mandate the WindowId.
         match (event.payload, event.window_id.as_ref()) {
             // Process IPC config update.
@@ -364,6 +640,8 @@ impl ApplicationHandler<Event> for Processor {
                     ipc::send_reply(&mut stream, SocketReply::GetConfig(config_json));
                 }
             },
+            #[cfg(unix)]
+            (EventType::IpcTab(request, stream), _) => self.handle_ipc_tab_request(request, stream),
             (EventType::ConfigReload(path), _) => {
                 // Clear config logs from message bar for all terminals.
                 for window_context in self.windows.values_mut() {
@@ -414,10 +692,10 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::CreateTab(options), Some(window_id)) => {
-                let (tab_id, terminal_id) = self.next_session_ids();
+                let session_ids = self.next_session_ids();
                 if let Some(window_context) = self.windows.get_mut(window_id) {
                     if let Err(err) =
-                        window_context.create_tab(options, self.proxy.clone(), tab_id, terminal_id)
+                        window_context.create_tab(options, self.proxy.clone(), session_ids)
                     {
                         error!("Could not open tab: {err:?}");
                     } else {
@@ -434,7 +712,6 @@ impl ApplicationHandler<Event> for Processor {
 
                     if window_context.close_active_tab() {
                         window_context.request_redraw();
-                        return;
                     }
                 }
             },
@@ -498,6 +775,15 @@ impl ApplicationHandler<Event> for Processor {
                         Some(window_context) if window_context.has_tab(tab_id) => window_context,
                         _ => return,
                     };
+
+                    match window_context.tab_holds_on_exit(tab_id) {
+                        Some(true) => return,
+                        Some(false) if window_context.is_active_tab(Some(tab_id)) => {
+                            window_context.display.window.hold = false;
+                        },
+                        Some(false) => (),
+                        None => return,
+                    }
 
                     if window_context.tab_count() > 1 {
                         if window_context.close_tab(tab_id) {
@@ -691,12 +977,25 @@ pub enum EventType {
     IpcConfig(IpcConfig),
     #[cfg(unix)]
     IpcGetConfig(Arc<UnixStream>),
+    #[cfg(unix)]
+    IpcTab(IpcTabRequest, Arc<UnixStream>),
     BlinkCursor,
     BlinkCursorTimeout,
     SearchNext,
     #[cfg(unix)]
     Shutdown,
     Frame,
+}
+
+/// Tab IPC request dispatched to the event loop.
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+pub enum IpcTabRequest {
+    Create(TabCreate),
+    List(TabWindowTarget),
+    Select(TabSelect),
+    Close(TabSelect),
+    Move(TabMove),
 }
 
 impl From<TerminalEvent> for EventType {
@@ -2099,7 +2398,10 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     TerminalEvent::Exit | TerminalEvent::ChildExit(_) | TerminalEvent::Wakeup => (),
                 },
                 #[cfg(unix)]
-                EventType::IpcConfig(_) | EventType::IpcGetConfig(..) | EventType::Shutdown => (),
+                EventType::IpcConfig(_)
+                | EventType::IpcGetConfig(..)
+                | EventType::IpcTab(..)
+                | EventType::Shutdown => (),
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)

@@ -15,7 +15,7 @@ use winit::event_loop::EventLoopProxy;
 use winit::window::WindowId;
 
 use crate::cli::{Options, SocketMessage};
-use crate::event::{Event, EventType};
+use crate::event::{Event, EventType, IpcTabRequest};
 
 /// Environment variable name for the IPC socket path.
 const ALACRITTY_SOCKET_ENV: &str = "ALACRITTY_SOCKET";
@@ -73,6 +73,41 @@ impl IpcListener {
                 let event = Event::new(EventType::CreateWindow(options), None);
                 let _ = self.event_proxy.send_event(event);
             },
+            SocketMessage::CreateTab(create) => {
+                let event = Event::new(
+                    EventType::IpcTab(IpcTabRequest::Create(create), Arc::new(stream)),
+                    None,
+                );
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::ListTabs(target) => {
+                let event = Event::new(
+                    EventType::IpcTab(IpcTabRequest::List(target), Arc::new(stream)),
+                    None,
+                );
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::SelectTab(select) => {
+                let event = Event::new(
+                    EventType::IpcTab(IpcTabRequest::Select(select), Arc::new(stream)),
+                    None,
+                );
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::CloseTab(select) => {
+                let event = Event::new(
+                    EventType::IpcTab(IpcTabRequest::Close(select), Arc::new(stream)),
+                    None,
+                );
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::MoveTab(tab_move) => {
+                let event = Event::new(
+                    EventType::IpcTab(IpcTabRequest::Move(tab_move), Arc::new(stream)),
+                    None,
+                );
+                let _ = self.event_proxy.send_event(event);
+            },
             SocketMessage::Config(ipc_config) => {
                 let window_id =
                     ipc_config.window_id.and_then(|id| u64::try_from(id).ok()).map(WindowId::from);
@@ -122,15 +157,25 @@ fn handle_reply(stream: &UnixStream, message: &SocketMessage) -> IoResult<()> {
     let reply: SocketReply = serde_json::from_str(&buffer)
         .map_err(|err| IoError::other(format!("Invalid IPC format: {err}")))?;
 
-    // Ensure reply matches request.
     match (message, &reply) {
         // Write requested config to STDOUT.
         (SocketMessage::GetConfig(..), SocketReply::GetConfig(config)) => {
             println!("{config}");
             Ok(())
         },
-        // Ignore requests without reply.
-        _ => Ok(()),
+        (_, SocketReply::Ok) => Ok(()),
+        (_, SocketReply::Error(err)) => {
+            Err(IoError::other(format!("{}: {}", err.code, err.message)))
+        },
+        (_, SocketReply::TabCreated(tab)) => {
+            println!("{}", serde_json::to_string(tab).map_err(IoError::other)?);
+            Ok(())
+        },
+        (_, SocketReply::Tabs(tabs)) => {
+            println!("{}", serde_json::to_string(tabs).map_err(IoError::other)?);
+            Ok(())
+        },
+        (_, SocketReply::GetConfig(_)) => Err(IoError::other("unexpected config reply")),
     }
 }
 
@@ -232,7 +277,75 @@ pub fn socket_prefix() -> String {
 }
 
 /// IPC socket replies.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SocketReply {
+    Ok,
+    Error(IpcError),
+    TabCreated(TabInfo),
+    Tabs(Vec<TabInfo>),
     GetConfig(String),
+}
+
+/// Structured IPC error.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct IpcError {
+    pub code: String,
+    pub message: String,
+}
+
+/// Metadata describing a tab for IPC replies.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TabInfo {
+    pub id: u64,
+    pub index: u64,
+    pub active: bool,
+    pub title: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_reply_roundtrip_new_variants() {
+        let replies = [
+            SocketReply::Ok,
+            SocketReply::Error(IpcError {
+                code: String::from("boom"),
+                message: String::from("boom"),
+            }),
+            SocketReply::TabCreated(TabInfo {
+                id: 1,
+                index: 0,
+                active: true,
+                title: String::from("tab"),
+            }),
+            SocketReply::Tabs(vec![TabInfo {
+                id: 2,
+                index: 1,
+                active: false,
+                title: String::from("second"),
+            }]),
+            SocketReply::GetConfig(String::from("[window]")),
+        ];
+
+        for reply in replies {
+            let json = serde_json::to_string(&reply).unwrap();
+            let decoded: SocketReply = serde_json::from_str(&json).unwrap();
+            assert_eq!(reply, decoded);
+        }
+    }
+
+    #[test]
+    fn socket_reply_shape_is_tagged() {
+        let reply = SocketReply::TabCreated(TabInfo {
+            id: 9,
+            index: 3,
+            active: false,
+            title: String::from("x"),
+        });
+
+        let json = serde_json::to_value(&reply).unwrap();
+        assert!(json.get("TabCreated").is_some());
+    }
 }

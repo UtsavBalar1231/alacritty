@@ -232,6 +232,7 @@ impl WindowIdentity {
 
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Subcommands {
     #[cfg(unix)]
     Msg(MessageOptions),
@@ -257,6 +258,21 @@ pub struct MessageOptions {
 pub enum SocketMessage {
     /// Create a new window in the same Alacritty process.
     CreateWindow(WindowOptions),
+
+    /// Create a new tab in the same Alacritty process.
+    CreateTab(TabCreate),
+
+    /// List all tabs in the current Alacritty process.
+    ListTabs(TabWindowTarget),
+
+    /// Select a tab in the current Alacritty process.
+    SelectTab(TabSelect),
+
+    /// Close a tab in the current Alacritty process.
+    CloseTab(TabSelect),
+
+    /// Move a tab in the current Alacritty process.
+    MoveTab(TabMove),
 
     /// Update the Alacritty configuration.
     Config(IpcConfig),
@@ -352,6 +368,119 @@ pub struct IpcGetConfig {
     pub window_id: Option<i128>,
 }
 
+/// Selector for tab-related IPC actions.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TabSelector {
+    /// Target a tab by ID.
+    #[clap(long = "tab-id", conflicts_with_all = ["tab_index", "active", "next", "previous", "first", "last"])]
+    pub tab_id: Option<u64>,
+
+    /// Target a tab by index.
+    #[clap(long = "tab-index", conflicts_with_all = ["tab_id", "active", "next", "previous", "first", "last"])]
+    pub tab_index: Option<u64>,
+
+    /// Target the active tab.
+    #[clap(long, action = ArgAction::SetTrue, conflicts_with_all = ["tab_id", "tab_index", "next", "previous", "first", "last"])]
+    pub active: bool,
+
+    /// Target the next tab.
+    #[clap(long, action = ArgAction::SetTrue, conflicts_with_all = ["tab_id", "tab_index", "active", "previous", "first", "last"])]
+    pub next: bool,
+
+    /// Target the previous tab.
+    #[clap(long, action = ArgAction::SetTrue, conflicts_with_all = ["tab_id", "tab_index", "active", "next", "first", "last"])]
+    pub previous: bool,
+
+    /// Target the first tab.
+    #[clap(long, action = ArgAction::SetTrue, conflicts_with_all = ["tab_id", "tab_index", "active", "next", "previous", "last"])]
+    pub first: bool,
+
+    /// Target the last tab.
+    #[clap(long, action = ArgAction::SetTrue, conflicts_with_all = ["tab_id", "tab_index", "active", "next", "previous", "first"])]
+    pub last: bool,
+}
+
+/// Window target for tab IPC actions.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TabWindowTarget {
+    /// Window ID for the tab request.
+    ///
+    /// Use `-1` to target the active window.
+    #[clap(short, long, allow_hyphen_values = true, env = "ALACRITTY_WINDOW_ID")]
+    pub window_id: Option<i128>,
+}
+
+/// Create-tab IPC parameters.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TabCreate {
+    #[clap(flatten)]
+    pub window: TabWindowTarget,
+
+    #[clap(flatten)]
+    pub window_options: WindowOptions,
+}
+
+/// Select or close a tab.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TabSelect {
+    #[clap(flatten)]
+    pub window: TabWindowTarget,
+
+    #[clap(flatten)]
+    pub selector: TabSelector,
+}
+
+/// Move a tab to a destination index.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TabMove {
+    #[clap(flatten)]
+    pub window: TabWindowTarget,
+
+    #[clap(flatten)]
+    pub selector: TabSelector,
+
+    /// Destination tab index.
+    #[clap(long, required = true)]
+    pub destination_index: u64,
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+impl TabSelector {
+    /// Resolve the selector into a tab target.
+    pub fn target(&self) -> TabTarget {
+        match self {
+            Self { tab_id: Some(tab_id), .. } => TabTarget::Id(*tab_id),
+            Self { tab_index: Some(tab_index), .. } => TabTarget::Index(*tab_index),
+            Self { active: true, .. } => TabTarget::Active,
+            Self { next: true, .. } => TabTarget::Next,
+            Self { previous: true, .. } => TabTarget::Previous,
+            Self { first: true, .. } => TabTarget::First,
+            Self { last: true, .. } => TabTarget::Last,
+            _ => TabTarget::Active,
+        }
+    }
+}
+
+/// Tab target resolved from a selector.
+#[cfg(unix)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabTarget {
+    Id(u64),
+    Index(u64),
+    Active,
+    Next,
+    Previous,
+    First,
+    Last,
+}
+
 /// Parsed CLI config overrides.
 #[derive(Debug, Default)]
 pub struct ParsedOptions {
@@ -431,10 +560,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::fs::File;
     #[cfg(target_os = "linux")]
-    use std::io::Read;
+    use std::io::{Read, Write};
 
     #[cfg(target_os = "linux")]
     use clap::CommandFactory;
+    #[cfg(unix)]
+    use clap::Parser;
     #[cfg(target_os = "linux")]
     use clap_complete::Shell;
     use toml::Table;
@@ -534,6 +665,94 @@ mod tests {
         assert_eq!(value, None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn tab_selector_defaults_to_active() {
+        assert_eq!(TabSelector::default().target(), TabTarget::Active);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tab_selector_parses_id_and_index() {
+        #[derive(Parser)]
+        struct SelectorArgs {
+            #[clap(flatten)]
+            selector: TabSelector,
+        }
+
+        let selector =
+            SelectorArgs::try_parse_from(["alacritty", "--tab-id", "42"]).unwrap().selector;
+        assert_eq!(selector.target(), TabTarget::Id(42));
+
+        let selector =
+            SelectorArgs::try_parse_from(["alacritty", "--tab-index", "7"]).unwrap().selector;
+        assert_eq!(selector.target(), TabTarget::Index(7));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tab_selector_exclusive_flags() {
+        #[derive(Parser)]
+        struct SelectorArgs {
+            #[clap(flatten)]
+            selector: TabSelector,
+        }
+
+        assert!(SelectorArgs::try_parse_from(["alacritty", "--tab-id", "42", "--next"]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_message_parses_new_tab_actions() {
+        #[derive(Parser)]
+        struct App {
+            #[clap(subcommand)]
+            message: SocketMessage,
+        }
+
+        let message =
+            App::try_parse_from(["alacritty", "select-tab", "--tab-index", "3"]).unwrap().message;
+
+        assert_eq!(
+            message,
+            SocketMessage::SelectTab(TabSelect {
+                window: TabWindowTarget::default(),
+                selector: TabSelector { tab_index: Some(3), ..Default::default() },
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_message_roundtrip_new_variants() {
+        let messages = [
+            SocketMessage::CreateTab(TabCreate {
+                window: TabWindowTarget::default(),
+                window_options: WindowOptions::default(),
+            }),
+            SocketMessage::ListTabs(TabWindowTarget::default()),
+            SocketMessage::SelectTab(TabSelect {
+                window: TabWindowTarget::default(),
+                selector: TabSelector { next: true, ..Default::default() },
+            }),
+            SocketMessage::CloseTab(TabSelect {
+                window: TabWindowTarget::default(),
+                selector: TabSelector { first: true, ..Default::default() },
+            }),
+            SocketMessage::MoveTab(TabMove {
+                window: TabWindowTarget::default(),
+                selector: TabSelector { last: true, ..Default::default() },
+                destination_index: 2,
+            }),
+        ];
+
+        for message in messages {
+            let json = serde_json::to_string(&message).unwrap();
+            let decoded: SocketMessage = serde_json::from_str(&json).unwrap();
+            assert_eq!(message, decoded);
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn completions() {
@@ -547,6 +766,12 @@ mod tests {
             let mut generated = Vec::new();
             clap_complete::generate(*shell, &mut clap, "alacritty", &mut generated);
             let generated = String::from_utf8_lossy(&generated);
+
+            if std::env::var_os("ALACRITTY_UPDATE_COMPLETIONS").is_some() {
+                let mut file = File::create(format!("../extra/completions/{file}")).unwrap();
+                file.write_all(generated.as_bytes()).unwrap();
+                continue;
+            }
 
             let mut completion = String::new();
             let mut file = File::open(format!("../extra/completions/{file}")).unwrap();

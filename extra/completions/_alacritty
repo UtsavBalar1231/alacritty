@@ -76,6 +76,77 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+'-w+[Window ID for the tab request]:WINDOW_ID:_default' \
+'--window-id=[Window ID for the tab request]:WINDOW_ID:_default' \
+'--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
+'*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'-T+[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
+'--title=[Defines the window title \[default\: Alacritty\]]:TITLE:_default' \
+'--class=[Defines window class/app_id on X11/Wayland \[default\: Alacritty\]]:general> | <general>,<instance:_default' \
+'*-o+[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
+'*--option=[Override configuration file options \[example\: '\''cursor.style="Beam"'\''\]]:OPTION:_default' \
+'--hold[Remain open after child process exit]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+'-w+[Window ID for the tab request]:WINDOW_ID:_default' \
+'--window-id=[Window ID for the tab request]:WINDOW_ID:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+'-w+[Window ID for the tab request]:WINDOW_ID:_default' \
+'--window-id=[Window ID for the tab request]:WINDOW_ID:_default' \
+'(--tab-index --active --next --previous --first --last)--tab-id=[Target a tab by ID]:TAB_ID:_default' \
+'(--tab-id --active --next --previous --first --last)--tab-index=[Target a tab by index]:TAB_INDEX:_default' \
+'(--tab-id --tab-index --next --previous --first --last)--active[Target the active tab]' \
+'(--tab-id --tab-index --active --previous --first --last)--next[Target the next tab]' \
+'(--tab-id --tab-index --active --next --first --last)--previous[Target the previous tab]' \
+'(--tab-id --tab-index --active --next --previous --last)--first[Target the first tab]' \
+'(--tab-id --tab-index --active --next --previous --first)--last[Target the last tab]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+'-w+[Window ID for the tab request]:WINDOW_ID:_default' \
+'--window-id=[Window ID for the tab request]:WINDOW_ID:_default' \
+'(--tab-index --active --next --previous --first --last)--tab-id=[Target a tab by ID]:TAB_ID:_default' \
+'(--tab-id --active --next --previous --first --last)--tab-index=[Target a tab by index]:TAB_INDEX:_default' \
+'(--tab-id --tab-index --next --previous --first --last)--active[Target the active tab]' \
+'(--tab-id --tab-index --active --previous --first --last)--next[Target the next tab]' \
+'(--tab-id --tab-index --active --next --first --last)--previous[Target the previous tab]' \
+'(--tab-id --tab-index --active --next --previous --last)--first[Target the first tab]' \
+'(--tab-id --tab-index --active --next --previous --first)--last[Target the last tab]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+'-w+[Window ID for the tab request]:WINDOW_ID:_default' \
+'--window-id=[Window ID for the tab request]:WINDOW_ID:_default' \
+'(--tab-index --active --next --previous --first --last)--tab-id=[Target a tab by ID]:TAB_ID:_default' \
+'(--tab-id --active --next --previous --first --last)--tab-index=[Target a tab by index]:TAB_INDEX:_default' \
+'--destination-index=[Destination tab index]:DESTINATION_INDEX:_default' \
+'(--tab-id --tab-index --next --previous --first --last)--active[Target the active tab]' \
+'(--tab-id --tab-index --active --previous --first --last)--next[Target the next tab]' \
+'(--tab-id --tab-index --active --next --first --last)--previous[Target the previous tab]' \
+'(--tab-id --tab-index --active --next --previous --last)--first[Target the first tab]' \
+'(--tab-id --tab-index --active --next --previous --first)--last[Target the last tab]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 '-w+[Window ID for the new config]:WINDOW_ID:_default' \
@@ -108,6 +179,26 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:alacritty-msg-help-command-$line[1]:"
         case $line[1] in
             (create-window)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(move-tab)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -174,6 +265,26 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(create-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-tabs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -235,15 +346,30 @@ _alacritty__help__migrate_commands() {
 _alacritty__help__msg_commands() {
     local commands; commands=(
 'create-window:Create a new window in the same Alacritty process' \
+'create-tab:Create a new tab in the same Alacritty process' \
+'list-tabs:List all tabs in the current Alacritty process' \
+'select-tab:Select a tab in the current Alacritty process' \
+'close-tab:Close a tab in the current Alacritty process' \
+'move-tab:Move a tab in the current Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
     )
     _describe -t commands 'alacritty help msg commands' commands "$@"
 }
+(( $+functions[_alacritty__help__msg__close-tab_commands] )) ||
+_alacritty__help__msg__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg close-tab commands' commands "$@"
+}
 (( $+functions[_alacritty__help__msg__config_commands] )) ||
 _alacritty__help__msg__config_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty help msg config commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__create-tab_commands] )) ||
+_alacritty__help__msg__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg create-tab commands' commands "$@"
 }
 (( $+functions[_alacritty__help__msg__create-window_commands] )) ||
 _alacritty__help__msg__create-window_commands() {
@@ -255,6 +381,21 @@ _alacritty__help__msg__get-config_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty help msg get-config commands' commands "$@"
 }
+(( $+functions[_alacritty__help__msg__list-tabs_commands] )) ||
+_alacritty__help__msg__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg list-tabs commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__move-tab_commands] )) ||
+_alacritty__help__msg__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg move-tab commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__select-tab_commands] )) ||
+_alacritty__help__msg__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg select-tab commands' commands "$@"
+}
 (( $+functions[_alacritty__migrate_commands] )) ||
 _alacritty__migrate_commands() {
     local commands; commands=()
@@ -264,16 +405,31 @@ _alacritty__migrate_commands() {
 _alacritty__msg_commands() {
     local commands; commands=(
 'create-window:Create a new window in the same Alacritty process' \
+'create-tab:Create a new tab in the same Alacritty process' \
+'list-tabs:List all tabs in the current Alacritty process' \
+'select-tab:Select a tab in the current Alacritty process' \
+'close-tab:Close a tab in the current Alacritty process' \
+'move-tab:Move a tab in the current Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'alacritty msg commands' commands "$@"
 }
+(( $+functions[_alacritty__msg__close-tab_commands] )) ||
+_alacritty__msg__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg close-tab commands' commands "$@"
+}
 (( $+functions[_alacritty__msg__config_commands] )) ||
 _alacritty__msg__config_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg config commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__create-tab_commands] )) ||
+_alacritty__msg__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg create-tab commands' commands "$@"
 }
 (( $+functions[_alacritty__msg__create-window_commands] )) ||
 _alacritty__msg__create-window_commands() {
@@ -289,16 +445,31 @@ _alacritty__msg__get-config_commands() {
 _alacritty__msg__help_commands() {
     local commands; commands=(
 'create-window:Create a new window in the same Alacritty process' \
+'create-tab:Create a new tab in the same Alacritty process' \
+'list-tabs:List all tabs in the current Alacritty process' \
+'select-tab:Select a tab in the current Alacritty process' \
+'close-tab:Close a tab in the current Alacritty process' \
+'move-tab:Move a tab in the current Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'alacritty msg help commands' commands "$@"
 }
+(( $+functions[_alacritty__msg__help__close-tab_commands] )) ||
+_alacritty__msg__help__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help close-tab commands' commands "$@"
+}
 (( $+functions[_alacritty__msg__help__config_commands] )) ||
 _alacritty__msg__help__config_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg help config commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__create-tab_commands] )) ||
+_alacritty__msg__help__create-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help create-tab commands' commands "$@"
 }
 (( $+functions[_alacritty__msg__help__create-window_commands] )) ||
 _alacritty__msg__help__create-window_commands() {
@@ -314,6 +485,36 @@ _alacritty__msg__help__get-config_commands() {
 _alacritty__msg__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg help help commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__list-tabs_commands] )) ||
+_alacritty__msg__help__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help list-tabs commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__move-tab_commands] )) ||
+_alacritty__msg__help__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help move-tab commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__select-tab_commands] )) ||
+_alacritty__msg__help__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help select-tab commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__list-tabs_commands] )) ||
+_alacritty__msg__list-tabs_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg list-tabs commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__move-tab_commands] )) ||
+_alacritty__msg__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg move-tab commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__select-tab_commands] )) ||
+_alacritty__msg__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg select-tab commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_alacritty" ]; then

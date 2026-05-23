@@ -49,6 +49,7 @@ use crate::display::cursor::IntoRects;
 use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
+pub mod tab_bar;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
@@ -56,26 +57,18 @@ use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
-use crate::tabs::TabId;
+#[allow(unused_imports)]
+pub use tab_bar::{
+    TabBarAlignment, TabBarCloseButtonVisibility, TabBarEntry, TabBarLayout, TabBarLayoutInput,
+    TabBarPoint, TabBarPosition, TabBarRect, TabBarSegment, TabBarState, TabBarVisibility,
+    layout_tab_bar,
+};
 
 pub mod color;
 pub mod content;
 pub mod cursor;
 pub mod hint;
 pub mod window;
-
-#[derive(Debug, Default)]
-pub struct TabBarState {
-    pub tabs: Vec<TabBarEntry>,
-    pub hit_regions: Vec<(TabId, usize, usize)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TabBarEntry {
-    pub id: TabId,
-    pub label: String,
-    pub active: bool,
-}
 
 mod bell;
 mod damage;
@@ -462,7 +455,7 @@ impl Display {
         let viewport_size = window.inner_size();
 
         // Create new size with at least one column and row.
-        let size_info = SizeInfo::new(
+        let mut size_info = SizeInfo::new(
             viewport_size.width as f32,
             viewport_size.height as f32,
             cell_width,
@@ -471,6 +464,13 @@ impl Display {
             padding.1,
             config.window.dynamic_padding && config.window.dimensions().is_none(),
         );
+        #[cfg(not(target_os = "macos"))]
+        if matches!(
+            config.window.tab_bar.visibility,
+            crate::config::window::TabBarVisibility::Always
+        ) {
+            size_info.reserve_lines(1);
+        }
 
         info!("Cell size: {cell_width} x {cell_height}");
         info!("Padding: {} x {}", size_info.padding_x(), size_info.padding_y());
@@ -812,8 +812,6 @@ impl Display {
         let total_lines = terminal.grid().total_lines();
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
-        let tab_bar_visible = tab_bar.as_ref().is_some_and(|tab_bar| tab_bar.tabs.len() >= 2);
-
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
 
@@ -929,7 +927,24 @@ impl Display {
         // Handle IME positioning and search bar rendering.
         let search_lines = usize::from(search_state.regex().is_some());
         let message_lines = message_buffer.message().map_or(0, |m| m.text(&size_info).len());
-        let tab_bar_line = size_info.screen_lines() + search_lines + message_lines;
+        let tab_bar_layout = tab_bar.as_ref().map(|tab_bar| {
+            let tab_config = config.window.tab_bar;
+            layout_tab_bar(TabBarLayoutInput {
+                tabs: &tab_bar.tabs,
+                columns: size_info.columns(),
+                screen_lines: size_info.screen_lines(),
+                search_lines,
+                message_lines,
+                visibility: tab_config.visibility.into(),
+                position: tab_config.position.into(),
+                alignment: tab_config.alignment.into(),
+                close_button_visibility: tab_config.close_button.into(),
+                hovered_tab: tab_bar.hovered_tab,
+                show_indices: tab_config.show_index,
+                max_width: Some(tab_config.max_width),
+                min_width: tab_config.min_width,
+            })
+        });
 
         let ime_position = match search_state.regex() {
             Some(regex) => {
@@ -969,37 +984,66 @@ impl Display {
             },
         };
 
-        if tab_bar_visible && let Some(tab_bar) = tab_bar {
-            tab_bar.hit_regions.clear();
+        let mut tab_bar_row = None;
+        let tab_bar_segments = if let (Some(tab_bar), Some(layout)) = (tab_bar, tab_bar_layout) {
+            tab_bar_row = layout.row;
+            tab_bar.row = layout.row;
+            tab_bar.hit_regions = layout.hit_regions;
+            tab_bar.close_regions = layout.close_regions;
 
-            let fg = config.colors.footer_bar_foreground();
-            let bg = config.colors.footer_bar_background();
-            let active_fg = config.colors.primary.background;
-            let active_bg = config.colors.primary.foreground;
-            let point = Point::new(tab_bar_line, Column(0));
-            let mut column = 0usize;
-            for tab in &tab_bar.tabs {
-                let text = format!(" {} ", tab.label);
-                let start = column;
-                let end = start + text.chars().count();
-                tab_bar.hit_regions.push((tab.id, start, end));
-                let (fg, bg) = if tab.active { (active_fg, active_bg) } else { (fg, bg) };
-                let mut local_point = point;
-                local_point.column = Column(column);
-                self.renderer.draw_string(
-                    local_point,
+            if let Some(background) = layout.full_row_background.filter(|_| layout.visible) {
+                let y =
+                    size_info.cell_height().mul_add(background.row as f32, size_info.padding_y());
+                let background_rect = RenderRect::new(
+                    0.,
+                    y,
+                    size_info.width(),
+                    size_info.cell_height(),
+                    config.colors.tab_bar_inactive_background(),
+                    1.,
+                );
+
+                let height = size_info.cell_height() as i32;
+                let width = size_info.width() as i32;
+                self.damage_tracker
+                    .frame()
+                    .add_viewport_rect(&size_info, 0, y as i32, width, height);
+                self.damage_tracker
+                    .next_frame()
+                    .add_viewport_rect(&size_info, 0, y as i32, width, height);
+                rects.push(background_rect);
+            }
+
+            layout.segments
+        } else {
+            Vec::new()
+        };
+
+        let draw_tab_bar = |display: &mut Self| {
+            for segment in tab_bar_segments.iter().filter(|segment| !segment.is_close_button) {
+                let (fg, bg) = if segment.active {
+                    (
+                        config.colors.tab_bar_active_foreground(),
+                        config.colors.tab_bar_active_background(),
+                    )
+                } else {
+                    (
+                        config.colors.tab_bar_inactive_foreground(),
+                        config.colors.tab_bar_inactive_background(),
+                    )
+                };
+                let point =
+                    Point::new(tab_bar_row.unwrap_or_default(), Column(segment.start_column));
+                display.renderer.draw_string(
+                    point,
                     fg,
                     bg,
-                    text.chars(),
+                    segment.text.chars(),
                     &size_info,
-                    &mut self.glyph_cache,
+                    &mut display.glyph_cache,
                 );
-                column = end;
-                if column >= size_info.columns() {
-                    break;
-                }
             }
-        }
+        };
 
         // Handle IME.
         if self.ime.is_enabled() {
@@ -1041,6 +1085,7 @@ impl Display {
 
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
+            draw_tab_bar(self);
 
             // Relay messages to the user.
             let glyph_cache = &mut self.glyph_cache;
@@ -1059,6 +1104,7 @@ impl Display {
         } else {
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
+            draw_tab_bar(self);
         }
 
         self.draw_render_timer(config);

@@ -65,6 +65,9 @@ pub struct WindowConfig {
 
     /// Window level.
     pub level: WindowLevel,
+
+    /// Tab bar configuration.
+    pub tab_bar: TabBarConfig,
 }
 
 impl Default for WindowConfig {
@@ -85,6 +88,7 @@ impl Default for WindowConfig {
             decorations_theme_variant: Default::default(),
             option_as_alt: Default::default(),
             level: Default::default(),
+            tab_bar: Default::default(),
         }
     }
 }
@@ -316,11 +320,136 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabBarConfig {
+    /// Tab bar visibility.
+    pub visibility: TabBarVisibility,
+
+    /// Tab bar position.
+    pub position: TabBarPosition,
+
+    /// Tab alignment.
+    pub alignment: TabBarAlignment,
+
+    /// Maximum tab width.
+    pub max_width: usize,
+
+    /// Minimum tab width.
+    pub min_width: usize,
+
+    /// Show tab indices.
+    pub show_index: bool,
+
+    /// Close button visibility.
+    pub close_button: TabBarCloseButton,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabBarVisibility {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabBarPosition {
+    #[default]
+    Bottom,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabBarAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabBarCloseButton {
+    Never,
+    #[default]
+    Hover,
+    Always,
+}
+
+impl Default for TabBarConfig {
+    fn default() -> Self {
+        Self {
+            visibility: Default::default(),
+            position: Default::default(),
+            alignment: Default::default(),
+            max_width: 24,
+            min_width: 6,
+            show_index: true,
+            close_button: Default::default(),
+        }
+    }
+}
+
 impl From<WindowLevel> for WinitWindowLevel {
     fn from(level: WindowLevel) -> Self {
         match level {
             WindowLevel::Normal => WinitWindowLevel::Normal,
             WindowLevel::AlwaysOnTop => WinitWindowLevel::AlwaysOnTop,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::UiConfig;
+
+    #[test]
+    fn tab_bar_defaults() {
+        assert_eq!(TabBarConfig::default(), TabBarConfig {
+            visibility: TabBarVisibility::Auto,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            max_width: 24,
+            min_width: 6,
+            show_index: true,
+            close_button: TabBarCloseButton::Hover,
+        });
+    }
+
+    #[test]
+    fn tab_bar_config_parses() {
+        let config = toml::from_str::<UiConfig>(
+            r#"
+            [window.tab_bar]
+            visibility = "Always"
+            position = "Bottom"
+            alignment = "Center"
+            max_width = 32
+            min_width = 8
+            show_index = false
+            close_button = "Never"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.window.tab_bar, TabBarConfig {
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Center,
+            max_width: 32,
+            min_width: 8,
+            show_index: false,
+            close_button: TabBarCloseButton::Never,
+        });
+    }
+
+    #[test]
+    fn invalid_tab_bar_visibility() {
+        assert!(toml::from_str::<TabBarVisibility>("\"Sometimes\"").is_err());
+    }
+
+    #[test]
+    fn invalid_tab_bar_position() {
+        assert!(toml::from_str::<TabBarPosition>("\"Top\"").is_err());
     }
 }

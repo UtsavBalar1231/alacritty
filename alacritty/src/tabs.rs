@@ -7,6 +7,10 @@ impl TabId {
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
+
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -15,6 +19,22 @@ pub struct TerminalId(u64);
 impl TerminalId {
     pub const fn new(value: u64) -> Self {
         Self(value)
+    }
+
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SessionIds {
+    pub tab_id: TabId,
+    pub terminal_id: TerminalId,
+}
+
+impl SessionIds {
+    pub const fn new(tab_id: TabId, terminal_id: TerminalId) -> Self {
+        Self { tab_id, terminal_id }
     }
 }
 
@@ -44,6 +64,7 @@ impl<T> Tab<T> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabSelection {
+    Active,
     Id(TabId),
     Index(usize),
     Next,
@@ -57,6 +78,7 @@ pub enum TabError {
     Empty,
     UnknownTab(TabId),
     InvalidIndex { index: usize, len: usize },
+    DuplicateTabId(TabId),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -130,16 +152,57 @@ impl<T> TabManager<T> {
     }
 
     pub fn open_with_id(&mut self, id: TabId, value: T) -> TabId {
+        self.open_with_id_checked(id, value).expect("duplicate tab id")
+    }
+
+    pub fn open_with_id_checked(&mut self, id: TabId, value: T) -> Result<TabId, TabError> {
+        if self.index_of(id).is_some() {
+            return Err(TabError::DuplicateTabId(id));
+        }
+
         self.next_id = self.next_id.max(id.0 + 1);
         let index = self.active.map_or(self.tabs.len(), |active| active + 1);
         self.tabs.insert(index, Tab { id, value });
         self.active = Some(index);
 
-        id
+        Ok(id)
+    }
+
+    pub fn move_by_id(&mut self, id: TabId, index: usize) -> Result<TabId, TabError> {
+        let source = self.index_of(id).ok_or(TabError::UnknownTab(id))?;
+        self.move_index(source, index)
+    }
+
+    pub fn move_active(&mut self, index: usize) -> Result<TabId, TabError> {
+        let source = self.active.ok_or(TabError::Empty)?;
+        self.move_index(source, index)
+    }
+
+    pub fn move_selection(
+        &mut self,
+        selection: TabSelection,
+        index: usize,
+    ) -> Result<TabId, TabError> {
+        let source = self.selection_index(selection)?;
+
+        self.move_index(source, index)
     }
 
     pub fn select(&mut self, selection: TabSelection) -> Result<TabId, TabError> {
-        let index = match selection {
+        let index = self.selection_index(selection)?;
+
+        self.active = Some(index);
+        Ok(self.tabs[index].id)
+    }
+
+    pub fn selected_id(&self, selection: TabSelection) -> Result<TabId, TabError> {
+        let index = self.selection_index(selection)?;
+        Ok(self.tabs[index].id)
+    }
+
+    fn selection_index(&self, selection: TabSelection) -> Result<usize, TabError> {
+        Ok(match selection {
+            TabSelection::Active => self.active.ok_or(TabError::Empty)?,
             TabSelection::Id(id) => self.index_of(id).ok_or(TabError::UnknownTab(id))?,
             TabSelection::Index(index) => {
                 if index >= self.tabs.len() {
@@ -151,10 +214,7 @@ impl<T> TabManager<T> {
             TabSelection::Previous => self.next_index(self.tabs.len().saturating_sub(1))?,
             TabSelection::First => self.non_empty_index(0)?,
             TabSelection::Last => self.non_empty_index(self.tabs.len().saturating_sub(1))?,
-        };
-
-        self.active = Some(index);
-        Ok(self.tabs[index].id)
+        })
     }
 
     pub fn close(&mut self, id: TabId) -> Result<CloseOutcome<T>, TabError> {
@@ -181,6 +241,27 @@ impl<T> TabManager<T> {
         }
 
         CloseOutcome { closed, next_active: self.active_id() }
+    }
+
+    fn move_index(&mut self, source: usize, index: usize) -> Result<TabId, TabError> {
+        if index >= self.tabs.len() {
+            return Err(TabError::InvalidIndex { index, len: self.tabs.len() });
+        }
+
+        if source == index {
+            return Ok(self.tabs[source].id);
+        }
+
+        let active_id = self.active_id();
+        let tab = self.tabs.remove(source);
+        let id = tab.id;
+        self.tabs.insert(index, tab);
+
+        if let Some(active_id) = active_id {
+            self.active = self.index_of(active_id);
+        }
+
+        Ok(id)
     }
 
     fn index_of(&self, id: TabId) -> Option<usize> {
@@ -249,6 +330,7 @@ mod tests {
         let first = manager.open(1);
         let second = manager.open(2);
 
+        assert_eq!(manager.select(TabSelection::Active), Ok(second));
         assert_eq!(manager.select(TabSelection::Id(first)), Ok(first));
         assert_eq!(manager.active().map(Tab::value), Some(&1));
         assert_eq!(manager.select(TabSelection::Index(1)), Ok(second));
@@ -360,11 +442,106 @@ mod tests {
         let mut manager = TabManager::new();
         let id = TabId::new(7);
 
-        let opened = manager.open_with_id(id, "tab");
+        let opened = manager.open_with_id_checked(id, "tab").unwrap();
 
         assert_eq!(opened, id);
         assert_eq!(manager.active_id(), Some(id));
         assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![id]);
         assert_eq!(manager.open("next"), TabId::new(8));
+    }
+
+    #[test]
+    fn open_with_id_checked_rejects_duplicates() {
+        let mut manager = TabManager::new();
+        let id = TabId::new(7);
+        manager.open_with_id_checked(id, "tab").unwrap();
+
+        assert_eq!(manager.open_with_id_checked(id, "dup"), Err(TabError::DuplicateTabId(id)));
+    }
+
+    #[test]
+    fn moving_active_tab_preserves_active_id() {
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+        let second = manager.open("second");
+        let third = manager.open("third");
+        manager.select(TabSelection::Id(second)).unwrap();
+
+        assert_eq!(manager.move_active(0), Ok(second));
+        assert_eq!(manager.active_id(), Some(second));
+        assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![second, first, third]);
+    }
+
+    #[test]
+    fn moving_inactive_tabs_left_and_right_preserves_active_id() {
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+        let second = manager.open("second");
+        let third = manager.open("third");
+        manager.select(TabSelection::Id(second)).unwrap();
+
+        assert_eq!(manager.move_by_id(third, 0), Ok(third));
+        assert_eq!(manager.active_id(), Some(second));
+        assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![third, first, second]);
+
+        assert_eq!(manager.move_by_id(third, 2), Ok(third));
+        assert_eq!(manager.active_id(), Some(second));
+        assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![first, second, third]);
+    }
+
+    #[test]
+    fn moving_to_invalid_index_fails() {
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+
+        assert_eq!(manager.move_by_id(first, 1), Err(TabError::InvalidIndex { index: 1, len: 1 }));
+        assert_eq!(manager.move_active(1), Err(TabError::InvalidIndex { index: 1, len: 1 }));
+    }
+
+    #[test]
+    fn moving_by_selection_variants_works() {
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+        let _second = manager.open("second");
+        let _third = manager.open("third");
+
+        assert_eq!(manager.move_selection(TabSelection::First, 2), Ok(first));
+
+        let mut manager = TabManager::new();
+        let _first = manager.open("first");
+        let _second = manager.open("second");
+        let third = manager.open("third");
+        assert_eq!(manager.move_selection(TabSelection::Last, 0), Ok(third));
+
+        let mut manager = TabManager::new();
+        let _first = manager.open("first");
+        let _second = manager.open("second");
+        let _third = manager.open("third");
+        manager.select(TabSelection::Id(first)).unwrap();
+        assert_eq!(manager.move_selection(TabSelection::Next, 1), Ok(_second));
+
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+        let second = manager.open("second");
+        let _third = manager.open("third");
+        manager.select(TabSelection::Id(second)).unwrap();
+        assert_eq!(manager.move_selection(TabSelection::Previous, 0), Ok(first));
+    }
+
+    #[test]
+    fn closing_and_reordering_preserves_relative_order_of_remaining_tabs() {
+        let mut manager = TabManager::new();
+        let first = manager.open("first");
+        let second = manager.open("second");
+        let third = manager.open("third");
+        let fourth = manager.open("fourth");
+        manager.select(TabSelection::Id(third)).unwrap();
+
+        manager.close(second).unwrap();
+        assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![first, third, fourth]);
+
+        manager.move_by_id(fourth, 0).unwrap();
+        assert_eq!(manager.iter().map(Tab::id).collect::<Vec<_>>(), vec![fourth, first, third]);
+        assert_eq!(manager.active_id(), Some(third));
     }
 }
