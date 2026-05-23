@@ -175,6 +175,9 @@ pub enum Action {
     /// Quit Alacritty.
     Quit,
 
+    /// Close the active tab.
+    CloseTab,
+
     /// Clear warning and error notices.
     ClearLogNotice,
 

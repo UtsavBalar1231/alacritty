@@ -63,6 +63,7 @@ use crate::message_bar::{Message, MessageBuffer};
 #[cfg(unix)]
 use crate::polling::ipc::{self, SocketReply};
 use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::tabs::{TabId, TabSelection, TerminalId};
 use crate::window_context::WindowContext;
 
 /// Duration after the last user input until an unlimited search is performed.
@@ -94,6 +95,8 @@ pub struct Processor {
     windows: HashMap<WindowId, WindowContext, RandomState>,
     proxy: EventLoopProxy<Event>,
     gl_config: Option<GlutinConfig>,
+    next_tab_id: u64,
+    next_terminal_id: u64,
     #[cfg(unix)]
     global_ipc_options: ParsedOptions,
     cli_options: CliOptions,
@@ -135,6 +138,8 @@ impl Processor {
             proxy,
             scheduler,
             gl_config: None,
+            next_tab_id: 0,
+            next_terminal_id: 0,
             config: Rc::new(config),
             clipboard,
             windows: Default::default(),
@@ -153,11 +158,14 @@ impl Processor {
         event_loop: &ActiveEventLoop,
         window_options: WindowOptions,
     ) -> Result<(), Box<dyn Error>> {
+        let (tab_id, terminal_id) = self.next_session_ids();
         let window_context = WindowContext::initial(
             event_loop,
             self.proxy.clone(),
             self.config.clone(),
             window_options,
+            tab_id,
+            terminal_id,
         )?;
 
         self.gl_config = Some(window_context.display.gl_context().config());
@@ -172,6 +180,7 @@ impl Processor {
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
     ) -> Result<(), Box<dyn Error>> {
+        let (tab_id, terminal_id) = self.next_session_ids();
         let gl_config = self.gl_config.as_ref().unwrap();
 
         // Override config with CLI/IPC options.
@@ -188,6 +197,8 @@ impl Processor {
             config,
             options,
             config_overrides,
+            tab_id,
+            terminal_id,
         )?;
 
         self.windows.insert(window_context.id(), window_context);
@@ -224,6 +235,16 @@ impl Processor {
                 | WindowEvent::HoveredFile(_)
                 | WindowEvent::Moved(_)
         )
+    }
+
+    fn next_session_ids(&mut self) -> (TabId, TerminalId) {
+        let tab_id = TabId::new(self.next_tab_id);
+        let terminal_id = TerminalId::new(self.next_terminal_id);
+
+        self.next_tab_id += 1;
+        self.next_terminal_id += 1;
+
+        (tab_id, terminal_id)
     }
 }
 
@@ -286,6 +307,9 @@ impl ApplicationHandler<Event> for Processor {
         if self.config.debug.print_events {
             info!(target: LOG_TARGET_WINIT, "{event:?}");
         }
+
+        let tab_id = event.tab_id;
+        let terminal_id = event.terminal_id;
 
         // Handle events which don't mandate the WindowId.
         match (event.payload, event.window_id.as_ref()) {
@@ -389,6 +413,55 @@ impl ApplicationHandler<Event> for Processor {
                     error!("Could not open window: {err:?}");
                 }
             },
+            (EventType::CreateTab(options), Some(window_id)) => {
+                let (tab_id, terminal_id) = self.next_session_ids();
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if let Err(err) =
+                        window_context.create_tab(options, self.proxy.clone(), tab_id, terminal_id)
+                    {
+                        error!("Could not open tab: {err:?}");
+                    } else {
+                        window_context.request_redraw();
+                    }
+                }
+            },
+            (EventType::CloseTab, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if window_context.tab_count() <= 1 {
+                        window_context.close_window();
+                        return;
+                    }
+
+                    if window_context.close_active_tab() {
+                        window_context.request_redraw();
+                        return;
+                    }
+                }
+            },
+            (EventType::CloseWindow, Some(window_id)) => {
+                if let Some(window_context) = self.windows.remove(window_id) {
+                    self.scheduler.unschedule_window(window_context.id());
+                    if self.windows.is_empty() && !self.cli_options.daemon {
+                        if self.config.debug.ref_test {
+                            window_context.write_ref_test_results();
+                        }
+                        event_loop.exit();
+                    }
+                }
+            },
+            (EventType::SelectTab(selection), Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    window_context.select_tab(selection);
+                    window_context.request_redraw();
+                }
+            },
+            (
+                EventType::CreateTab(_)
+                | EventType::CloseTab
+                | EventType::CloseWindow
+                | EventType::SelectTab(_),
+                None,
+            ) => (),
             // Shutdown all windows.
             #[cfg(unix)]
             (EventType::Shutdown, _) => event_loop.exit(),
@@ -408,6 +481,11 @@ impl ApplicationHandler<Event> for Processor {
             },
             (EventType::Terminal(TerminalEvent::Wakeup), Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if !window_context.is_active_tab(tab_id) {
+                        window_context.dirty = true;
+                        return;
+                    }
+
                     window_context.dirty = true;
                     if window_context.display.window.has_frame {
                         window_context.display.window.request_redraw();
@@ -415,6 +493,22 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::Terminal(TerminalEvent::Exit), Some(window_id)) => {
+                if let Some(tab_id) = tab_id {
+                    let window_context = match self.windows.get_mut(window_id) {
+                        Some(window_context) if window_context.has_tab(tab_id) => window_context,
+                        _ => return,
+                    };
+
+                    if window_context.tab_count() > 1 {
+                        if window_context.close_tab(tab_id) {
+                            window_context.request_redraw();
+                            return;
+                        }
+                    } else {
+                        // Single-tab exits should still close the window below.
+                    }
+                }
+
                 // Remove the closed terminal.
                 let window_context = match self.windows.entry(*window_id) {
                     // Don't exit when terminal exits if user asked to hold the window.
@@ -450,13 +544,24 @@ impl ApplicationHandler<Event> for Processor {
             },
             (payload, Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if matches!(payload, EventType::Terminal(_))
+                        && !window_context.is_active_tab(tab_id)
+                    {
+                        return;
+                    }
+
                     window_context.handle_event(
                         #[cfg(target_os = "macos")]
                         event_loop,
                         &self.proxy,
                         &mut self.clipboard,
                         &mut self.scheduler,
-                        WinitEvent::UserEvent(Event::new(payload, *window_id)),
+                        WinitEvent::UserEvent(Event {
+                            window_id: Some(*window_id),
+                            tab_id,
+                            terminal_id,
+                            payload,
+                        }),
                     );
                 }
             },
@@ -522,13 +627,45 @@ pub struct Event {
     /// Limit event to a specific window.
     window_id: Option<WindowId>,
 
+    /// Limit event to a specific tab.
+    tab_id: Option<TabId>,
+
+    /// Limit event to a specific terminal session.
+    terminal_id: Option<TerminalId>,
+
     /// Event payload.
     payload: EventType,
 }
 
 impl Event {
     pub fn new<I: Into<Option<WindowId>>>(payload: EventType, window_id: I) -> Self {
-        Self { window_id: window_id.into(), payload }
+        Self { window_id: window_id.into(), tab_id: None, terminal_id: None, payload }
+    }
+
+    pub fn terminal(
+        payload: EventType,
+        window_id: WindowId,
+        tab_id: TabId,
+        terminal_id: TerminalId,
+    ) -> Self {
+        Self {
+            window_id: Some(window_id),
+            tab_id: Some(tab_id),
+            terminal_id: Some(terminal_id),
+            payload,
+        }
+    }
+
+    pub fn tab_id(&self) -> Option<TabId> {
+        self.tab_id
+    }
+
+    pub fn terminal_id(&self) -> Option<TerminalId> {
+        self.terminal_id
+    }
+
+    pub fn payload(&self) -> &EventType {
+        &self.payload
     }
 }
 
@@ -546,6 +683,10 @@ pub enum EventType {
     Message(Message),
     Scroll(Scroll),
     CreateWindow(WindowOptions),
+    CreateTab(WindowOptions),
+    CloseTab,
+    CloseWindow,
+    SelectTab(TabSelection),
     #[cfg(unix)]
     IpcConfig(IpcConfig),
     #[cfg(unix)]
@@ -900,6 +1041,35 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         let _ = self
             .event_proxy
             .send_event(Event::new(EventType::CreateWindow(WindowOptions::default()), None));
+    }
+
+    fn create_new_tab(&mut self) {
+        let mut options = WindowOptions::default();
+        #[cfg(not(windows))]
+        {
+            options.terminal_options.working_directory =
+                foreground_process_path(self.master_fd, self.shell_pid).ok();
+        }
+
+        let event = Event::new(EventType::CreateTab(options), self.display.window.id());
+        let _ = self.event_proxy.send_event(event);
+    }
+
+    fn close_tab(&mut self) -> bool {
+        let _ =
+            self.event_proxy.send_event(Event::new(EventType::CloseTab, self.display.window.id()));
+        true
+    }
+
+    fn close_window(&mut self) {
+        let _ = self
+            .event_proxy
+            .send_event(Event::new(EventType::CloseWindow, self.display.window.id()));
+    }
+
+    fn select_tab(&mut self, selection: TabSelection) {
+        let event = Event::new(EventType::SelectTab(selection), self.display.window.id());
+        let _ = self.event_proxy.send_event(event);
     }
 
     fn spawn_daemon<I, S>(&self, program: &str, args: I)
@@ -1933,14 +2103,16 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
+                | EventType::CreateTab(_)
+                | EventType::CloseTab
+                | EventType::CloseWindow
+                | EventType::SelectTab(_)
                 | EventType::Frame => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {
                     WindowEvent::CloseRequested => {
-                        // User asked to close the window, so no need to hold it.
-                        self.ctx.window().hold = false;
-                        self.ctx.terminal.exit();
+                        self.ctx.close_window();
                     },
                     WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                         let old_scale_factor =
@@ -2073,21 +2245,30 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
 pub struct EventProxy {
     proxy: EventLoopProxy<Event>,
     window_id: WindowId,
+    tab_id: TabId,
+    terminal_id: TerminalId,
 }
 
 impl EventProxy {
-    pub fn new(proxy: EventLoopProxy<Event>, window_id: WindowId) -> Self {
-        Self { proxy, window_id }
+    pub fn new(
+        proxy: EventLoopProxy<Event>,
+        window_id: WindowId,
+        tab_id: TabId,
+        terminal_id: TerminalId,
+    ) -> Self {
+        Self { proxy, window_id, tab_id, terminal_id }
     }
 
     /// Send an event to the event loop.
     pub fn send_event(&self, event: EventType) {
-        let _ = self.proxy.send_event(Event::new(event, self.window_id));
+        let event = Event::terminal(event, self.window_id, self.tab_id, self.terminal_id);
+        let _ = self.proxy.send_event(event);
     }
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: TerminalEvent) {
-        let _ = self.proxy.send_event(Event::new(event.into(), self.window_id));
+        let event = Event::terminal(event.into(), self.window_id, self.tab_id, self.terminal_id);
+        let _ = self.proxy.send_event(event);
     }
 }

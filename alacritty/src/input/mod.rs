@@ -49,6 +49,7 @@ use crate::event::{
 };
 use crate::message_bar::{self, Message};
 use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::tabs::TabSelection;
 
 pub mod keyboard;
 
@@ -103,6 +104,12 @@ pub trait ActionContext<T: EventListener> {
     fn create_new_window(&mut self, _tabbing_id: Option<String>) {}
     #[cfg(not(target_os = "macos"))]
     fn create_new_window(&mut self) {}
+    fn create_new_tab(&mut self) {}
+    fn close_tab(&mut self) -> bool {
+        false
+    }
+    fn close_window(&mut self) {}
+    fn select_tab(&mut self, _selection: TabSelection) {}
     fn change_font_size(&mut self, _delta: f32) {}
     fn reset_font_size(&mut self) {}
     fn pop_message(&mut self) {}
@@ -344,8 +351,14 @@ impl<T: EventListener> Execute<T> for Action {
             Action::Hide => ctx.window().set_visible(false),
             Action::Minimize => ctx.window().set_minimized(true),
             Action::Quit => {
-                ctx.window().hold = false;
-                ctx.terminal_mut().exit();
+                ctx.close_window();
+            },
+            #[cfg(not(target_os = "macos"))]
+            Action::CloseTab => {
+                if !ctx.close_tab() {
+                    ctx.window().hold = false;
+                    ctx.terminal_mut().exit();
+                }
             },
             Action::IncreaseFontSize => ctx.change_font_size(FONT_SIZE_STEP),
             Action::DecreaseFontSize => ctx.change_font_size(-FONT_SIZE_STEP),
@@ -406,6 +419,32 @@ impl<T: EventListener> Execute<T> for Action {
             #[cfg(not(target_os = "macos"))]
             Action::CreateNewWindow => ctx.create_new_window(),
             Action::SpawnNewInstance => ctx.spawn_new_instance(),
+            #[cfg(not(target_os = "macos"))]
+            Action::CreateNewTab => ctx.create_new_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectNextTab => ctx.select_tab(TabSelection::Next),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectPreviousTab => ctx.select_tab(TabSelection::Previous),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab1 => ctx.select_tab(TabSelection::Index(0)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab2 => ctx.select_tab(TabSelection::Index(1)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab3 => ctx.select_tab(TabSelection::Index(2)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab4 => ctx.select_tab(TabSelection::Index(3)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab5 => ctx.select_tab(TabSelection::Index(4)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab6 => ctx.select_tab(TabSelection::Index(5)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab7 => ctx.select_tab(TabSelection::Index(6)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab8 => ctx.select_tab(TabSelection::Index(7)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectTab9 => ctx.select_tab(TabSelection::Index(8)),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectLastTab => ctx.select_tab(TabSelection::Last),
             #[cfg(target_os = "macos")]
             Action::CreateNewWindow => ctx.create_new_window(None),
             #[cfg(target_os = "macos")]

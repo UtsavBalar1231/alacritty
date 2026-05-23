@@ -56,12 +56,26 @@ use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
+use crate::tabs::TabId;
 
 pub mod color;
 pub mod content;
 pub mod cursor;
 pub mod hint;
 pub mod window;
+
+#[derive(Debug, Default)]
+pub struct TabBarState {
+    pub tabs: Vec<TabBarEntry>,
+    pub hit_regions: Vec<(TabId, usize, usize)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TabBarEntry {
+    pub id: TabId,
+    pub label: String,
+    pub active: bool,
+}
 
 mod bell;
 mod damage;
@@ -655,6 +669,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         search_state: &mut SearchState,
         config: &UiConfig,
+        tab_bar_visible: bool,
     ) where
         T: EventListener,
     {
@@ -703,7 +718,7 @@ impl Display {
         let search_active = search_state.history_index.is_some();
         let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
         let search_lines = usize::from(search_active);
-        new_size.reserve_lines(message_bar_lines + search_lines);
+        new_size.reserve_lines(message_bar_lines + search_lines + usize::from(tab_bar_visible));
 
         // Update resize increments.
         if config.window.resize_increments {
@@ -779,6 +794,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
+        tab_bar: Option<&mut TabBarState>,
     ) {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
@@ -796,6 +812,7 @@ impl Display {
         let total_lines = terminal.grid().total_lines();
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
+        let tab_bar_visible = tab_bar.as_ref().is_some_and(|tab_bar| tab_bar.tabs.len() >= 2);
 
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
@@ -910,6 +927,10 @@ impl Display {
         }
 
         // Handle IME positioning and search bar rendering.
+        let search_lines = usize::from(search_state.regex().is_some());
+        let message_lines = message_buffer.message().map_or(0, |m| m.text(&size_info).len());
+        let tab_bar_line = size_info.screen_lines() + search_lines + message_lines;
+
         let ime_position = match search_state.regex() {
             Some(regex) => {
                 let search_label = match search_state.direction() {
@@ -948,6 +969,38 @@ impl Display {
             },
         };
 
+        if tab_bar_visible && let Some(tab_bar) = tab_bar {
+            tab_bar.hit_regions.clear();
+
+            let fg = config.colors.footer_bar_foreground();
+            let bg = config.colors.footer_bar_background();
+            let active_fg = config.colors.primary.background;
+            let active_bg = config.colors.primary.foreground;
+            let point = Point::new(tab_bar_line, Column(0));
+            let mut column = 0usize;
+            for tab in &tab_bar.tabs {
+                let text = format!(" {} ", tab.label);
+                let start = column;
+                let end = start + text.chars().count();
+                tab_bar.hit_regions.push((tab.id, start, end));
+                let (fg, bg) = if tab.active { (active_fg, active_bg) } else { (fg, bg) };
+                let mut local_point = point;
+                local_point.column = Column(column);
+                self.renderer.draw_string(
+                    local_point,
+                    fg,
+                    bg,
+                    text.chars(),
+                    &size_info,
+                    &mut self.glyph_cache,
+                );
+                column = end;
+                if column >= size_info.columns() {
+                    break;
+                }
+            }
+        }
+
         // Handle IME.
         if self.ime.is_enabled() {
             if let Some(point) = ime_position {
@@ -962,7 +1015,7 @@ impl Display {
         }
 
         if let Some(message) = message_buffer.message() {
-            let search_offset = usize::from(search_state.regex().is_some());
+            let search_offset = search_lines;
             let text = message.text(&size_info);
 
             // Create a new rectangle for the background.
@@ -976,7 +1029,7 @@ impl Display {
 
             let x = 0;
             let width = size_info.width() as i32;
-            let height = (size_info.height() - y) as i32;
+            let height = (message_lines as f32 * size_info.cell_height()) as i32;
             let message_bar_rect =
                 RenderRect::new(x as f32, y, width as f32, height as f32, bg, 1.);
 
