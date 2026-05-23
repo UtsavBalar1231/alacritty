@@ -14,6 +14,11 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 - Fixed `alacritty-escapes(7)` manpage missing from macOS install
 
+### Added
+
+- Internal tabs with a configurable bottom tab bar on non-macOS platforms
+- IPC commands for creating, listing, selecting, closing, and moving tabs
+
 ### Fixed
 
 - Spurious "Failed to set new owner of XCB selection" warnings on X11

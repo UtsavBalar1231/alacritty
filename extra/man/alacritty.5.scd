@@ -207,6 +207,53 @@ This section documents the *[window]* table of the configuration file.
 
 	Default: _"Normal"_
 
+*tab_bar*
+
+	This section documents the *[window.tab_bar]* table of the configuration.
+	The internal tab bar is only used on non-macOS platforms.
+
+	*visibility* = _"Auto"_ | _"Always"_ | _"Never"_
+
+		Controls when the tab bar is visible.
+
+		Default: _"Auto"_
+
+	*position* = _"Bottom"_
+
+		Position of the tab bar.
+
+		Default: _"Bottom"_
+
+	*alignment* = _"Left"_ | _"Center"_ | _"Right"_
+
+		Tab alignment inside the tab bar.
+
+		Default: _"Left"_
+
+	*max_width* = _<integer>_
+
+		Maximum width of each tab in terminal cells.
+
+		Default: _24_
+
+	*min_width* = _<integer>_
+
+		Minimum width of each tab in terminal cells.
+
+		Default: _6_
+
+	*show_index* = _true_ | _false_
+
+		Display tab indices in labels.
+
+		Default: _true_
+
+	*close_button* = _"Never"_ | _"Hover"_ | _"Always"_
+
+		Controls when close buttons are displayed.
+
+		Default: _"Hover"_
+
 Example:
 	*[window]*++
 padding = { x = _3_, y = _3_ }++
@@ -395,6 +442,26 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 	hyperlink URI preview, etc.
 
 	Default: { foreground = _"#181818"_, background = _"#d8d8d8"_ }
+
+*tab_bar*
+
+	This section documents the *[colors.tab_bar]* table of the configuration.
+
+	*active* = { foreground = _"<string>"_, background = _"<string>"_ }
+
+		Colors used for the active tab.
+
+		Setting a field to _"None"_ will use the matching primary color.
+
+		Default: { foreground = _"None"_, background = _"None"_ }
+
+	*inactive* = { foreground = _"<string>"_, background = _"<string>"_ }
+
+		Colors used for inactive tabs and the tab bar background.
+
+		Setting a field to _"None"_ will use the matching footer bar color.
+
+		Default: { foreground = _"None"_, background = _"None"_ }
 
 *selection* = { text = _"<string>"_, background = _"<string>"_ }
 

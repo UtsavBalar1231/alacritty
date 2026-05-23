@@ -53,6 +53,130 @@ making it possible to control Alacritty without directly accessing it.
 
 			Command and args to execute (must be last argument).
 
+*create-tab*
+
+	Create a new tab in the same Alacritty process. This is only supported by
+	the internal tab implementation on non-macOS platforms.
+
+	Prints JSON metadata for the created tab on success.
+
+	*FLAGS*
+		*--hold*
+
+			Remain open after child process exits.
+
+	*OPTIONS*
+		*-w, --window-id* _<WINDOW_ID>_
+
+			Window ID for the tab request. Use _-1_ to target the active window.
+
+			Default: _$ALACRITTY_WINDOW_ID_
+
+		*--working-directory* _<WORKING_DIRECTORY>_
+
+			Start the shell in the specified working directory.
+
+		*-T, --title* _<TITLE>_
+
+			Defines the tab title.
+
+			Default: _Alacritty_
+
+		*--class* _<GENERAL>_ | _<GENERAL>_,_<INSTANCE>_
+
+			Defines window class/app_id on X11/Wayland.
+
+		*-o, --option* _<OPTION>..._
+
+			Override configuration file options for the new tab.
+
+		*-e, --command* _<COMMAND>..._
+
+			Command and args to execute (must be last argument).
+
+*list-tabs*
+
+	List tabs in the target window as a JSON array.
+
+	*OPTIONS*
+		*-w, --window-id* _<WINDOW_ID>_
+
+			Window ID for the tab request. Use _-1_ to target the active window.
+
+			Default: _$ALACRITTY_WINDOW_ID_
+
+*select-tab*
+
+	Select a tab in the target window.
+
+	*OPTIONS*
+		*-w, --window-id* _<WINDOW_ID>_
+
+			Window ID for the tab request. Use _-1_ to target the active window.
+
+			Default: _$ALACRITTY_WINDOW_ID_
+
+		*--tab-id* _<TAB_ID>_
+
+			Target a tab by ID.
+
+		*--tab-index* _<TAB_INDEX>_
+
+			Target a tab by zero-based index.
+
+	*FLAGS*
+		*--active*
+
+			Target the active tab.
+
+		*--next*
+
+			Target the next tab.
+
+		*--previous*
+
+			Target the previous tab.
+
+		*--first*
+
+			Target the first tab.
+
+		*--last*
+
+			Target the last tab.
+
+*close-tab*
+
+	Close a tab in the target window. Closing the last tab closes the window.
+
+	The options and flags are the same as *select-tab*.
+
+*move-tab*
+
+	Move a tab to a new zero-based index in the target window.
+
+	*OPTIONS*
+		*-w, --window-id* _<WINDOW_ID>_
+
+			Window ID for the tab request. Use _-1_ to target the active window.
+
+			Default: _$ALACRITTY_WINDOW_ID_
+
+		*--destination-index* _<TAB_INDEX>_
+
+			Destination tab index.
+
+		*--tab-id* _<TAB_ID>_
+
+			Target a tab by ID.
+
+		*--tab-index* _<TAB_INDEX>_
+
+			Target a tab by zero-based index.
+
+	*FLAGS*
+		The selector flags are the same as *select-tab*.
+
 *config*
 
 	Update the Alacritty configuration.
