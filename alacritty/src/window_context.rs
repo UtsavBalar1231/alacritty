@@ -34,7 +34,7 @@ use alacritty_terminal::vte::ansi::NamedColor;
 use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
-use crate::config::window::TabBarVisibility;
+use crate::config::window::{TabBarConfig, TabBarVisibility};
 use crate::display::Display;
 use crate::display::window::Window;
 use crate::event::{
@@ -64,6 +64,94 @@ fn visible_title(
     }
 }
 
+fn format_tab_title(
+    template: &str,
+    index: usize,
+    title: &str,
+    activity: &str,
+    bell: &str,
+) -> String {
+    let mut rendered = String::new();
+    let mut remaining = template;
+    while !remaining.is_empty() {
+        if let Some(placeholder) = remaining.strip_prefix("{index}") {
+            push_tab_title_value(&mut rendered, &(index + 1).to_string());
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{zero_index}") {
+            push_tab_title_value(&mut rendered, &index.to_string());
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{title}") {
+            push_tab_title_value(&mut rendered, title);
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{activity}") {
+            push_tab_title_value(&mut rendered, activity);
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{bell}") {
+            push_tab_title_value(&mut rendered, bell);
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{program}") {
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{cwd}") {
+            remaining = placeholder;
+        } else if let Some(placeholder) = remaining.strip_prefix("{modified}") {
+            remaining = placeholder;
+        } else {
+            let ch = remaining.chars().next().unwrap();
+            if !ch.is_control() {
+                rendered.push(ch);
+            }
+            remaining = &remaining[ch.len_utf8()..];
+        }
+    }
+
+    rendered
+}
+
+fn push_tab_title_value(title: &mut String, value: &str) {
+    title.extend(value.chars().filter(|c| !c.is_control()));
+}
+
+fn tab_label_from_parts(
+    tab_bar: &TabBarConfig,
+    index: usize,
+    active: bool,
+    title: &str,
+    has_activity: bool,
+    has_bell: bool,
+) -> String {
+    let show_indicator = tab_bar.show_activity_indicator && !active;
+    let activity =
+        if show_indicator && has_activity { tab_bar.activity_indicator.as_str() } else { "" };
+    let bell = if show_indicator && has_bell { tab_bar.bell_indicator.as_str() } else { "" };
+    let template = if active {
+        tab_bar.active_title_template.as_ref().or(tab_bar.title_template.as_ref())
+    } else {
+        tab_bar.inactive_title_template.as_ref().or(tab_bar.title_template.as_ref())
+    };
+
+    match template {
+        Some(template) => {
+            let label = format_tab_title(template, index, title, activity, bell);
+            if show_indicator && !template.contains("{activity}") && !template.contains("{bell}") {
+                if has_bell {
+                    format!("{} {}", tab_bar.bell_indicator, label)
+                } else if has_activity {
+                    format!("{} {}", tab_bar.activity_indicator, label)
+                } else {
+                    label
+                }
+            } else {
+                label
+            }
+        },
+        None if show_indicator && has_bell => format!("{} {}", tab_bar.bell_indicator, title),
+        None if show_indicator && has_activity => {
+            format!("{} {}", tab_bar.activity_indicator, title)
+        },
+        None => title.to_owned(),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TabBarHit {
     Tab(TabId),
@@ -87,7 +175,7 @@ struct TerminalSession {
     title: Option<String>,
     static_title: String,
     has_activity: bool,
-    activity_changed: bool,
+    has_bell: bool,
     cursor_blink_timed_out: bool,
     prev_bell_cmd: Option<Instant>,
     inline_search_state: InlineSearchState,
@@ -187,7 +275,7 @@ impl TerminalSession {
             title: None,
             static_title,
             has_activity: false,
-            activity_changed: false,
+            has_bell: false,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -222,7 +310,6 @@ impl TerminalSession {
 
     fn set_title(&mut self, title: Option<String>) {
         self.title = title;
-        self.activity_changed = true;
     }
 
     fn visible_title(&self) -> String {
@@ -234,14 +321,33 @@ impl TerminalSession {
         )
     }
 
-    fn mark_activity(&mut self) {
+    fn mark_activity(&mut self) -> bool {
+        let changed = !self.has_activity;
         self.has_activity = true;
-        self.activity_changed = true;
+        changed
+    }
+
+    fn mark_bell(&mut self) -> bool {
+        let changed = !self.has_activity || !self.has_bell;
+        self.has_bell = true;
+        self.has_activity = true;
+        changed
     }
 
     fn clear_activity(&mut self) {
         self.has_activity = false;
-        self.activity_changed = false;
+        self.has_bell = false;
+    }
+
+    fn tab_label(&self, index: usize, active: bool, tab_bar: &TabBarConfig) -> String {
+        tab_label_from_parts(
+            tab_bar,
+            index,
+            active,
+            &self.visible_title(),
+            self.has_activity,
+            self.has_bell,
+        )
     }
 
     fn spawn_daemon<I, S>(&self, program: &str, args: I)
@@ -624,9 +730,10 @@ impl WindowContext {
         }
 
         if was_active {
-            self.active_session_mut().terminal.lock().is_focused = focused;
             let (title, hold) = {
-                let session = self.active_session();
+                let session = self.active_session_mut();
+                session.clear_activity();
+                session.terminal.lock().is_focused = focused;
                 (session.visible_title(), session.hold)
             };
             self.display.window.hold = hold;
@@ -648,6 +755,22 @@ impl WindowContext {
         let tab_id = self.tabs.move_selection(selection, index)?;
         self.mark_tab_change_dirty();
         Ok(tab_id)
+    }
+
+    pub fn move_active_tab_left(&mut self) -> bool {
+        let Some(index) = self.tabs.active_index() else {
+            return false;
+        };
+
+        index > 0 && self.move_tab(TabSelection::Active, index - 1).is_ok()
+    }
+
+    pub fn move_active_tab_right(&mut self) -> bool {
+        let Some(index) = self.tabs.active_index() else {
+            return false;
+        };
+
+        index + 1 < self.tabs.len() && self.move_tab(TabSelection::Active, index + 1).is_ok()
     }
 
     #[cfg(unix)]
@@ -803,12 +926,15 @@ impl WindowContext {
                     std::time::Duration::from_millis(100);
                 let mut urgent = false;
                 let mut ring = false;
+                let mut tab_activity_changed = false;
                 {
                     let Some(session) = self.validate_terminal_event_target(tab_id, terminal_id)
                     else {
                         return false;
                     };
-                    session.mark_activity();
+                    if !active {
+                        tab_activity_changed = session.mark_bell();
+                    }
                     if active {
                         let terminal = session.terminal.lock();
                         urgent = terminal.mode().contains(TermMode::URGENCY_HINTS)
@@ -827,6 +953,12 @@ impl WindowContext {
                 }
                 if ring {
                     self.display.visual_bell.ring();
+                }
+                if tab_activity_changed {
+                    self.mark_tab_change_dirty();
+                    if self.display.window.has_frame {
+                        self.display.window.request_redraw();
+                    }
                 }
             },
             TerminalEvent::ClipboardStore(clipboard_type, content) => {
@@ -897,11 +1029,17 @@ impl WindowContext {
                 }
             },
             TerminalEvent::Wakeup => {
-                if let Some(session) = self.validate_terminal_event_target(tab_id, terminal_id) {
-                    session.mark_activity();
+                let tab_activity_changed =
+                    match self.validate_terminal_event_target(tab_id, terminal_id) {
+                        Some(session) if !active => session.mark_activity(),
+                        Some(_) => false,
+                        None => return false,
+                    };
+                if tab_activity_changed {
+                    self.mark_tab_change_dirty();
                 }
-                self.dirty = true;
-                if active && self.display.window.has_frame {
+                if (active || tab_activity_changed) && self.display.window.has_frame {
+                    self.dirty = true;
                     self.display.window.request_redraw();
                 }
             },
@@ -957,13 +1095,14 @@ impl WindowContext {
 
     fn tab_bar_entries(&self) -> Vec<crate::display::TabBarEntry> {
         let active_tab_id = self.tabs.active_id();
+        let tab_bar = &self.active_session().config.window.tab_bar;
         self.tabs
             .iter()
             .enumerate()
             .map(|(index, tab)| crate::display::TabBarEntry {
                 id: tab.id(),
                 index,
-                label: tab.value().visible_title(),
+                label: tab.value().tab_label(index, active_tab_id == Some(tab.id()), tab_bar),
                 active: active_tab_id == Some(tab.id()),
             })
             .collect()
@@ -975,7 +1114,7 @@ impl WindowContext {
     ) -> crate::display::TabBarLayout {
         let size = self.display.size_info;
         let config = &self.active_session().config;
-        let tab_config = config.window.tab_bar;
+        let tab_config = &config.window.tab_bar;
         let visibility = if self.tab_bar_visible(config) {
             tab_config.visibility.into()
         } else {
@@ -995,7 +1134,7 @@ impl WindowContext {
             alignment: tab_config.alignment.into(),
             close_button_visibility: tab_config.close_button.into(),
             hovered_tab: self.tab_bar.hovered_tab,
-            show_indices: tab_config.show_index,
+            show_indices: tab_config.show_indices(),
             max_width: Some(tab_config.max_width),
             min_width: tab_config.min_width,
         })
@@ -1081,6 +1220,7 @@ impl WindowContext {
 
         // Redraw the window.
         let active_tab_id = self.tabs.active_id();
+        let tab_bar = &self.active_session().config.window.tab_bar;
         self.tab_bar.tabs = self
             .tabs
             .iter()
@@ -1088,7 +1228,7 @@ impl WindowContext {
             .map(|(index, tab)| crate::display::TabBarEntry {
                 id: tab.id(),
                 index,
-                label: tab.value().visible_title(),
+                label: tab.value().tab_label(index, active_tab_id == Some(tab.id()), tab_bar),
                 active: active_tab_id == Some(tab.id()),
             })
             .collect();
@@ -1350,7 +1490,9 @@ impl WindowContext {
 
 #[cfg(test)]
 mod tests {
-    use super::visible_title;
+    use super::{format_tab_title, tab_label_from_parts, visible_title};
+
+    use crate::config::window::TabBarConfig;
 
     #[test]
     fn visible_title_uses_terminal_title_when_dynamic_titles_are_enabled() {
@@ -1370,5 +1512,45 @@ mod tests {
     #[test]
     fn visible_title_preserves_cli_title() {
         assert_eq!(visible_title("custom", true, true, Some("shell")), "custom");
+    }
+
+    #[test]
+    fn tab_title_template_replaces_known_placeholders_once() {
+        assert_eq!(
+            format_tab_title(
+                "{index}:{zero_index}:{title}:{activity}:{bell}:{program}:{cwd}:{modified}",
+                2,
+                "{bell}\n",
+                "•",
+                "!",
+            ),
+            "3:2:{bell}:•:!:::"
+        );
+    }
+
+    #[test]
+    fn tab_label_adds_default_activity_indicators_to_inactive_tabs() {
+        let tab_bar = TabBarConfig::default();
+
+        assert_eq!(tab_label_from_parts(&tab_bar, 0, false, "shell", false, false), "shell");
+        assert_eq!(tab_label_from_parts(&tab_bar, 0, false, "shell", true, false), "• shell");
+        assert_eq!(tab_label_from_parts(&tab_bar, 0, false, "shell", true, true), "! shell");
+        assert_eq!(tab_label_from_parts(&tab_bar, 0, true, "shell", true, true), "shell");
+    }
+
+    #[test]
+    fn tab_label_uses_templates_and_honors_indicator_toggle() {
+        let mut tab_bar = TabBarConfig {
+            title_template: Some("{index}: {title}".into()),
+            inactive_title_template: Some("{bell}{activity}{title}".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(tab_label_from_parts(&tab_bar, 1, true, "shell", false, false), "2: shell");
+        assert_eq!(tab_label_from_parts(&tab_bar, 1, false, "shell", true, true), "!•shell");
+
+        tab_bar.show_activity_indicator = false;
+
+        assert_eq!(tab_label_from_parts(&tab_bar, 1, false, "shell", true, true), "shell");
     }
 }

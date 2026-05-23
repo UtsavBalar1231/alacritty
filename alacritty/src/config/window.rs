@@ -320,7 +320,7 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
-#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct TabBarConfig {
     /// Tab bar visibility.
     pub visibility: TabBarVisibility,
@@ -342,6 +342,24 @@ pub struct TabBarConfig {
 
     /// Close button visibility.
     pub close_button: TabBarCloseButton,
+
+    /// Base tab title template.
+    pub title_template: Option<String>,
+
+    /// Active tab title template.
+    pub active_title_template: Option<String>,
+
+    /// Inactive tab title template.
+    pub inactive_title_template: Option<String>,
+
+    /// Activity indicator text.
+    pub activity_indicator: String,
+
+    /// Bell indicator text.
+    pub bell_indicator: String,
+
+    /// Show activity and bell indicators.
+    pub show_activity_indicator: bool,
 }
 
 #[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -384,7 +402,22 @@ impl Default for TabBarConfig {
             min_width: 6,
             show_index: true,
             close_button: Default::default(),
+            title_template: Default::default(),
+            active_title_template: Default::default(),
+            inactive_title_template: Default::default(),
+            activity_indicator: String::from("•"),
+            bell_indicator: String::from("!"),
+            show_activity_indicator: true,
         }
+    }
+}
+
+impl TabBarConfig {
+    pub fn show_indices(&self) -> bool {
+        self.show_index
+            && self.title_template.is_none()
+            && self.active_title_template.is_none()
+            && self.inactive_title_template.is_none()
     }
 }
 
@@ -413,6 +446,12 @@ mod tests {
             min_width: 6,
             show_index: true,
             close_button: TabBarCloseButton::Hover,
+            title_template: None,
+            active_title_template: None,
+            inactive_title_template: None,
+            activity_indicator: String::from("•"),
+            bell_indicator: String::from("!"),
+            show_activity_indicator: true,
         });
     }
 
@@ -428,6 +467,12 @@ mod tests {
             min_width = 8
             show_index = false
             close_button = "Never"
+            title_template = "{index}: {title}"
+            active_title_template = "[{index}] {title}"
+            inactive_title_template = "{activity}{bell} {title}"
+            activity_indicator = "*"
+            bell_indicator = "!"
+            show_activity_indicator = false
             "#,
         )
         .unwrap();
@@ -440,7 +485,22 @@ mod tests {
             min_width: 8,
             show_index: false,
             close_button: TabBarCloseButton::Never,
+            title_template: Some(String::from("{index}: {title}")),
+            active_title_template: Some(String::from("[{index}] {title}")),
+            inactive_title_template: Some(String::from("{activity}{bell} {title}")),
+            activity_indicator: String::from("*"),
+            bell_indicator: String::from("!"),
+            show_activity_indicator: false,
         });
+    }
+
+    #[test]
+    fn tab_bar_indices_are_suppressed_by_templates() {
+        let mut tab_bar = TabBarConfig::default();
+        assert!(tab_bar.show_indices());
+
+        tab_bar.title_template = Some("{index}: {title}".into());
+        assert!(!tab_bar.show_indices());
     }
 
     #[test]

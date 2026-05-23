@@ -110,6 +110,8 @@ pub trait ActionContext<T: EventListener> {
     }
     fn close_window(&mut self) {}
     fn select_tab(&mut self, _selection: TabSelection) {}
+    fn move_active_tab_left(&mut self) {}
+    fn move_active_tab_right(&mut self) {}
     fn change_font_size(&mut self, _delta: f32) {}
     fn reset_font_size(&mut self) {}
     fn pop_message(&mut self) {}
@@ -443,6 +445,10 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SelectTab9 => ctx.select_tab(TabSelection::Index(8)),
             #[cfg(not(target_os = "macos"))]
             Action::SelectLastTab => ctx.select_tab(TabSelection::Last),
+            #[cfg(not(target_os = "macos"))]
+            Action::MoveTabLeft => ctx.move_active_tab_left(),
+            #[cfg(not(target_os = "macos"))]
+            Action::MoveTabRight => ctx.move_active_tab_right(),
             #[cfg(target_os = "macos")]
             Action::CreateNewWindow => ctx.create_new_window(None),
             #[cfg(target_os = "macos")]

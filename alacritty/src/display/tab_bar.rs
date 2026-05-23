@@ -142,55 +142,48 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
         ));
     }
 
-    let content_width = prepared.iter().map(|(_, text, _)| width(text)).sum::<usize>();
-    let start_column = match input.alignment {
-        TabBarAlignment::Left => 0,
-        TabBarAlignment::Center => input.columns.saturating_sub(content_width) / 2,
-        TabBarAlignment::Right => input.columns.saturating_sub(content_width),
-    };
-
     let mut segments = Vec::new();
     let mut hit_regions = Vec::new();
     let mut close_regions = Vec::new();
-    let mut column = start_column;
-    for (tab, text, close_start) in prepared {
-        let start = column;
-        let available = input.columns.saturating_sub(start);
-        if available == 0 {
-            break;
-        }
 
-        let text = clip_text(&text, available);
-        let end = start + text.width();
-        if end == start {
-            break;
-        }
+    let content_width = prepared.iter().map(|(_, text, _)| width(text)).sum::<usize>();
+    if content_width <= input.columns {
+        let start_column = match input.alignment {
+            TabBarAlignment::Left => 0,
+            TabBarAlignment::Center => input.columns.saturating_sub(content_width) / 2,
+            TabBarAlignment::Right => input.columns.saturating_sub(content_width),
+        };
+        push_tab_segments(
+            &prepared,
+            start_column,
+            input.columns,
+            &mut segments,
+            &mut hit_regions,
+            &mut close_regions,
+        );
+    } else {
+        let active = prepared.iter().position(|(tab, ..)| tab.active).unwrap_or(0);
+        let (first, last) = visible_overflow_range(&prepared, active, input.columns);
+        let show_indicators = input.columns >= 3;
+        let hidden_left = show_indicators && first > 0;
+        let hidden_right = show_indicators && last < prepared.len();
 
-        hit_regions.push((tab.id, start, end));
-        segments.push(TabBarSegment {
-            text: text.clone(),
-            active: tab.active,
-            tab_id: Some(tab.id),
-            start_column: start,
-            end_column: end,
-            is_close_button: false,
-        });
-        if let Some(close_start) = close_start.map(|close_start| start + close_start) {
-            if close_start < end {
-                close_regions.push((tab.id, close_start, close_start + 1));
-                segments.push(TabBarSegment {
-                    text: "×".into(),
-                    active: tab.active,
-                    tab_id: Some(tab.id),
-                    start_column: close_start,
-                    end_column: close_start + 1,
-                    is_close_button: true,
-                });
-            }
+        let mut column = 0;
+        if hidden_left {
+            push_overflow_indicator("…", column, &mut segments);
+            column += 1;
         }
-        column = end;
-        if column >= input.columns {
-            break;
+        push_tab_segments(
+            &prepared[first..last],
+            column,
+            input.columns.saturating_sub(usize::from(hidden_right)),
+            &mut segments,
+            &mut hit_regions,
+            &mut close_regions,
+        );
+        column = segments.iter().map(|segment| segment.end_column).max().unwrap_or(column);
+        if hidden_right && column < input.columns {
+            push_overflow_indicator("…", input.columns - 1, &mut segments);
         }
     }
 
@@ -250,6 +243,109 @@ impl From<crate::config::window::TabBarCloseButton> for TabBarCloseButtonVisibil
 
 fn width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
+}
+
+type PreparedTab<'a> = (&'a TabBarEntry, String, Option<usize>);
+
+fn visible_overflow_range(
+    tabs: &[PreparedTab<'_>],
+    active: usize,
+    columns: usize,
+) -> (usize, usize) {
+    let mut first = active;
+    let mut last = active + 1;
+
+    loop {
+        let mut changed = false;
+        if last < tabs.len() && overflow_range_width(tabs, first, last + 1, columns) <= columns {
+            last += 1;
+            changed = true;
+        }
+        if first > 0 && overflow_range_width(tabs, first - 1, last, columns) <= columns {
+            first -= 1;
+            changed = true;
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    (first, last)
+}
+
+fn overflow_range_width(
+    tabs: &[PreparedTab<'_>],
+    first: usize,
+    last: usize,
+    columns: usize,
+) -> usize {
+    let indicator_width =
+        if columns >= 3 { usize::from(first > 0) + usize::from(last < tabs.len()) } else { 0 };
+    tabs[first..last].iter().map(|(_, text, _)| width(text)).sum::<usize>() + indicator_width
+}
+
+fn push_tab_segments(
+    tabs: &[PreparedTab<'_>],
+    start_column: usize,
+    end_column_limit: usize,
+    segments: &mut Vec<TabBarSegment>,
+    hit_regions: &mut Vec<(TabId, usize, usize)>,
+    close_regions: &mut Vec<(TabId, usize, usize)>,
+) {
+    let mut column = start_column;
+    for (tab, text, close_start) in tabs {
+        let start = column;
+        let available = end_column_limit.saturating_sub(start);
+        if available == 0 {
+            break;
+        }
+
+        let text = clip_text(text, available);
+        let end = start + text.width();
+        if end == start {
+            break;
+        }
+
+        hit_regions.push((tab.id, start, end));
+        segments.push(TabBarSegment {
+            text,
+            active: tab.active,
+            tab_id: Some(tab.id),
+            start_column: start,
+            end_column: end,
+            is_close_button: false,
+        });
+        if let Some(close_start) = close_start.map(|close_start| start + close_start) {
+            if close_start < end {
+                close_regions.push((tab.id, close_start, close_start + 1));
+                segments.push(TabBarSegment {
+                    text: "×".into(),
+                    active: tab.active,
+                    tab_id: Some(tab.id),
+                    start_column: close_start,
+                    end_column: close_start + 1,
+                    is_close_button: true,
+                });
+            }
+        }
+
+        column = end;
+        if column >= end_column_limit {
+            break;
+        }
+    }
+}
+
+fn push_overflow_indicator(text: &str, column: usize, segments: &mut Vec<TabBarSegment>) {
+    segments.push(TabBarSegment {
+        text: text.into(),
+        active: false,
+        tab_id: None,
+        start_column: column,
+        end_column: column + 1,
+        is_close_button: false,
+    });
 }
 
 fn prepare_tab_segment<'a>(
@@ -658,5 +754,71 @@ mod tests {
         });
         assert!(left.segments[0].start_column < center.segments[0].start_column);
         assert!(center.segments[0].start_column < right.segments[0].start_column);
+    }
+
+    #[test]
+    fn overflow_keeps_active_tab_visible() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[
+                ("one", false),
+                ("two", false),
+                ("three", true),
+                ("four", false),
+                ("five", false),
+                ("six", false),
+            ]),
+            columns: 12,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: Some(5),
+            min_width: 0,
+        });
+
+        assert!(layout.hit_regions.iter().any(|(id, ..)| *id == TabId::new(2)));
+        assert!(!layout.hit_regions.iter().any(|(id, ..)| *id == TabId::new(0)));
+        assert!(!layout.hit_regions.iter().any(|(id, ..)| *id == TabId::new(5)));
+        assert!(layout.segments.iter().all(|segment| segment.end_column <= 12));
+    }
+
+    #[test]
+    fn overflow_marks_hidden_tabs() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[
+                ("one", false),
+                ("two", false),
+                ("three", true),
+                ("four", false),
+                ("five", false),
+                ("six", false),
+            ]),
+            columns: 12,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: Some(5),
+            min_width: 0,
+        });
+
+        let overflow_columns = layout
+            .segments
+            .iter()
+            .filter(|segment| segment.tab_id.is_none() && segment.text == "…")
+            .map(|segment| segment.start_column)
+            .collect::<Vec<_>>();
+
+        assert_eq!(overflow_columns, vec![0, 11]);
     }
 }

@@ -732,11 +732,27 @@ impl ApplicationHandler<Event> for Processor {
                     window_context.request_redraw();
                 }
             },
+            (EventType::MoveTabLeft, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id)
+                    && window_context.move_active_tab_left()
+                {
+                    window_context.request_redraw();
+                }
+            },
+            (EventType::MoveTabRight, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id)
+                    && window_context.move_active_tab_right()
+                {
+                    window_context.request_redraw();
+                }
+            },
             (
                 EventType::CreateTab(_)
                 | EventType::CloseTab
                 | EventType::CloseWindow
-                | EventType::SelectTab(_),
+                | EventType::SelectTab(_)
+                | EventType::MoveTabLeft
+                | EventType::MoveTabRight,
                 None,
             ) => (),
             // Shutdown all windows.
@@ -973,6 +989,8 @@ pub enum EventType {
     CloseTab,
     CloseWindow,
     SelectTab(TabSelection),
+    MoveTabLeft,
+    MoveTabRight,
     #[cfg(unix)]
     IpcConfig(IpcConfig),
     #[cfg(unix)]
@@ -1368,6 +1386,16 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn select_tab(&mut self, selection: TabSelection) {
         let event = Event::new(EventType::SelectTab(selection), self.display.window.id());
+        let _ = self.event_proxy.send_event(event);
+    }
+
+    fn move_active_tab_left(&mut self) {
+        let event = Event::new(EventType::MoveTabLeft, self.display.window.id());
+        let _ = self.event_proxy.send_event(event);
+    }
+
+    fn move_active_tab_right(&mut self) {
+        let event = Event::new(EventType::MoveTabRight, self.display.window.id());
         let _ = self.event_proxy.send_event(event);
     }
 
@@ -2409,6 +2437,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::CloseTab
                 | EventType::CloseWindow
                 | EventType::SelectTab(_)
+                | EventType::MoveTabLeft
+                | EventType::MoveTabRight
                 | EventType::Frame => (),
             },
             WinitEvent::WindowEvent { event, .. } => {

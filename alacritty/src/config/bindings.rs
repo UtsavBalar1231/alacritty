@@ -220,6 +220,12 @@ pub enum Action {
     /// Select the last tab.
     SelectLastTab,
 
+    /// Move active tab one slot left.
+    MoveTabLeft,
+
+    /// Move active tab one slot right.
+    MoveTabRight,
+
     /// Create a new Alacritty window.
     CreateNewWindow,
 

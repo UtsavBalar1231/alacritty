@@ -928,7 +928,7 @@ impl Display {
         let search_lines = usize::from(search_state.regex().is_some());
         let message_lines = message_buffer.message().map_or(0, |m| m.text(&size_info).len());
         let tab_bar_layout = tab_bar.as_ref().map(|tab_bar| {
-            let tab_config = config.window.tab_bar;
+            let tab_config = &config.window.tab_bar;
             layout_tab_bar(TabBarLayoutInput {
                 tabs: &tab_bar.tabs,
                 columns: size_info.columns(),
@@ -940,7 +940,7 @@ impl Display {
                 alignment: tab_config.alignment.into(),
                 close_button_visibility: tab_config.close_button.into(),
                 hovered_tab: tab_bar.hovered_tab,
-                show_indices: tab_config.show_index,
+                show_indices: tab_config.show_indices(),
                 max_width: Some(tab_config.max_width),
                 min_width: tab_config.min_width,
             })
