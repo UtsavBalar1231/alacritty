@@ -293,7 +293,7 @@ struct HintsAlphabet(String);
 
 impl Default for HintsAlphabet {
     fn default() -> Self {
-        Self(String::from("jfkdls;ahgurieowpq"))
+        Self(String::from("123456789abcdefghijklmnopqrstuvwxyz"))
     }
 }
 
@@ -710,6 +710,13 @@ mod tests {
         assert!(
             matches!(binding.trigger, BindingKey::Keycode { key: Key::Character(ref key), .. } if key.as_ref() == "o")
         );
+    }
+
+    #[test]
+    fn default_hint_alphabet() {
+        let config = Hints::default();
+
+        assert_eq!(config.alphabet(), "123456789abcdefghijklmnopqrstuvwxyz");
     }
 
     #[test]

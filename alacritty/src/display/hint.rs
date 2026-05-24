@@ -19,9 +19,6 @@ use crate::config::ui_config::{Hint, HintAction};
 /// Maximum number of linewraps followed outside of the viewport during search highlighting.
 pub const MAX_SEARCH_LINES: usize = 100;
 
-/// Percentage of characters in the hints alphabet used for the last character.
-const HINT_SPLIT_PERCENTAGE: f32 = 0.5;
-
 /// Keyboard regex hint state.
 pub struct HintState {
     /// Hint currently in use.
@@ -112,9 +109,9 @@ impl HintState {
         self.matches.sort_by_key(|bounds| (*bounds.start(), Reverse(*bounds.end())));
         self.matches.dedup_by_key(|bounds| *bounds.start());
 
-        let mut generator = HintLabels::new(&self.alphabet, HINT_SPLIT_PERCENTAGE);
         let match_count = self.matches.len();
         let keys_len = self.keys.len();
+        let mut generator = HintLabels::new(&self.alphabet, match_count);
 
         // Get the label for each match.
         self.labels.resize(match_count, Vec::new());
@@ -256,27 +253,22 @@ struct HintLabels {
 
     /// Alphabet indices for the next label.
     indices: Vec<usize>,
-
-    /// Point separating the alphabet's head and tail characters.
-    ///
-    /// To make identification of the tail character easy, part of the alphabet cannot be used for
-    /// any other position.
-    ///
-    /// All characters in the alphabet before this index will be used for the last character, while
-    /// the rest will be used for everything else.
-    split_point: usize,
 }
 
 impl HintLabels {
     /// Create a new label generator.
-    ///
-    /// The `split_ratio` should be a number between 0.0 and 1.0 representing the percentage of
-    /// elements in the alphabet which are reserved for the tail of the hint label.
-    fn new(alphabet: impl Into<String>, split_ratio: f32) -> Self {
+    fn new(alphabet: impl Into<String>, label_count: usize) -> Self {
         let alphabet: Vec<char> = alphabet.into().chars().collect();
-        let split_point = ((alphabet.len() - 1) as f32 * split_ratio.min(1.)) as usize;
+        assert!(!alphabet.is_empty(), "hint alphabet must not be empty");
 
-        Self { indices: vec![0], split_point, alphabet }
+        let mut width = 1;
+        let mut capacity = alphabet.len();
+        while capacity < label_count {
+            width += 1;
+            capacity *= alphabet.len();
+        }
+
+        Self { indices: vec![0; width], alphabet }
     }
 
     /// Get the characters for the next label.
@@ -288,29 +280,15 @@ impl HintLabels {
 
     /// Increment the character sequence.
     fn increment(&mut self) {
-        // Increment the last character; if it's not at the split point we're done.
-        let tail = &mut self.indices[0];
-        if *tail < self.split_point {
-            *tail += 1;
-            return;
-        }
-        *tail = 0;
-
-        // Increment all other characters in reverse order.
         let alphabet_len = self.alphabet.len();
-        for index in self.indices.iter_mut().skip(1) {
-            if *index + 1 == alphabet_len {
-                // Reset character and move to the next if it's already at the limit.
-                *index = self.split_point + 1;
-            } else {
-                // If the character can be incremented, we're done.
+        for index in &mut self.indices {
+            if *index + 1 < alphabet_len {
                 *index += 1;
                 return;
             }
-        }
 
-        // Extend the sequence with another character when nothing could be incremented.
-        self.indices.push(self.split_point + 1);
+            *index = 0;
+        }
     }
 }
 
@@ -643,41 +621,21 @@ mod tests {
 
     #[test]
     fn hint_label_generation() {
-        let mut generator = HintLabels::new("0123", 0.5);
+        let mut generator = HintLabels::new("123abc", 6);
 
-        assert_eq!(generator.next(), vec!['0']);
         assert_eq!(generator.next(), vec!['1']);
+        assert_eq!(generator.next(), vec!['2']);
+        assert_eq!(generator.next(), vec!['3']);
+        assert_eq!(generator.next(), vec!['a']);
+        assert_eq!(generator.next(), vec!['b']);
+        assert_eq!(generator.next(), vec!['c']);
 
-        assert_eq!(generator.next(), vec!['2', '0']);
+        let mut generator = HintLabels::new("123", 4);
+
+        assert_eq!(generator.next(), vec!['1', '1']);
+        assert_eq!(generator.next(), vec!['1', '2']);
+        assert_eq!(generator.next(), vec!['1', '3']);
         assert_eq!(generator.next(), vec!['2', '1']);
-        assert_eq!(generator.next(), vec!['3', '0']);
-        assert_eq!(generator.next(), vec!['3', '1']);
-
-        assert_eq!(generator.next(), vec!['2', '2', '0']);
-        assert_eq!(generator.next(), vec!['2', '2', '1']);
-        assert_eq!(generator.next(), vec!['2', '3', '0']);
-        assert_eq!(generator.next(), vec!['2', '3', '1']);
-        assert_eq!(generator.next(), vec!['3', '2', '0']);
-        assert_eq!(generator.next(), vec!['3', '2', '1']);
-        assert_eq!(generator.next(), vec!['3', '3', '0']);
-        assert_eq!(generator.next(), vec!['3', '3', '1']);
-
-        assert_eq!(generator.next(), vec!['2', '2', '2', '0']);
-        assert_eq!(generator.next(), vec!['2', '2', '2', '1']);
-        assert_eq!(generator.next(), vec!['2', '2', '3', '0']);
-        assert_eq!(generator.next(), vec!['2', '2', '3', '1']);
-        assert_eq!(generator.next(), vec!['2', '3', '2', '0']);
-        assert_eq!(generator.next(), vec!['2', '3', '2', '1']);
-        assert_eq!(generator.next(), vec!['2', '3', '3', '0']);
-        assert_eq!(generator.next(), vec!['2', '3', '3', '1']);
-        assert_eq!(generator.next(), vec!['3', '2', '2', '0']);
-        assert_eq!(generator.next(), vec!['3', '2', '2', '1']);
-        assert_eq!(generator.next(), vec!['3', '2', '3', '0']);
-        assert_eq!(generator.next(), vec!['3', '2', '3', '1']);
-        assert_eq!(generator.next(), vec!['3', '3', '2', '0']);
-        assert_eq!(generator.next(), vec!['3', '3', '2', '1']);
-        assert_eq!(generator.next(), vec!['3', '3', '3', '0']);
-        assert_eq!(generator.next(), vec!['3', '3', '3', '1']);
     }
 
     #[test]

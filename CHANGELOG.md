@@ -21,6 +21,11 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Tab title templates, activity indicators, overflow markers, and move-left/right actions
 - Configurable URL opening actions and hover previews for plain text URLs
 
+### Changed
+
+- Default hint labels now start with numbers before lowercase letters and use fixed-width labels
+  when necessary
+
 ### Fixed
 
 - Spurious "Failed to set new owner of XCB selection" warnings on X11

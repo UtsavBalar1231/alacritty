@@ -848,7 +848,7 @@ terminal and pipe it to other applications.
 
 	Keys used for the hint labels.
 
-	Default: _"jfkdls;ahgurieowpq"_
+	Default: _"123456789abcdefghijklmnopqrstuvwxyz"_
 
 *enabled* = [{ *<regex>*, *<hyperlinks>*, *<post_processing>*, *<persist>*, *<action>*, *<command>*, *<binding>*, *<mouse>* },]
 
