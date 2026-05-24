@@ -30,6 +30,7 @@ use crate::config::debug::Debug;
 use crate::config::font::Font;
 use crate::config::general::General;
 use crate::config::mouse::Mouse;
+use crate::config::open::OpenConfig;
 use crate::config::scrolling::Scrolling;
 use crate::config::selection::Selection;
 use crate::config::terminal::Terminal;
@@ -82,6 +83,9 @@ pub struct UiConfig {
 
     /// Regex hints for interacting with terminal content.
     pub hints: Hints,
+
+    /// URL opening configuration.
+    pub open: OpenConfig,
 
     /// Config for the alacritty_terminal itself.
     pub terminal: Terminal,
@@ -253,15 +257,7 @@ impl Default for Hints {
         let regex = LazyRegex(Rc::new(RefCell::new(pattern)));
         let content = HintContent::new(Some(regex), true);
 
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let action = HintAction::Command(Program::Just(String::from("xdg-open")));
-        #[cfg(target_os = "macos")]
-        let action = HintAction::Command(Program::Just(String::from("open")));
-        #[cfg(windows)]
-        let action = HintAction::Command(Program::WithArgs {
-            program: String::from("cmd"),
-            args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
-        });
+        let action = HintAction::Action(HintInternalAction::Open);
 
         Self {
             enabled: vec![Rc::new(Hint {
@@ -327,6 +323,9 @@ impl<'de> Deserialize<'de> for HintsAlphabet {
 /// Built-in actions for hint mode.
 #[derive(ConfigDeserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum HintInternalAction {
+    /// Open the text using the configured URL opener.
+    Open,
+
     /// Copy the text to the clipboard.
     Copy,
     /// Write the text to the PTY/search.
@@ -683,8 +682,35 @@ mod tests {
     use super::*;
 
     use alacritty_terminal::term::test::mock_term;
+    use winit::keyboard::Key;
 
+    use crate::config::BindingMode;
     use crate::display::hint::visible_regex_match_iter;
+
+    #[test]
+    fn default_url_hint_uses_open_action() {
+        let config = Hints::default();
+        let hint = config.enabled.first().unwrap();
+
+        assert_eq!(hint.action, HintAction::Action(HintInternalAction::Open));
+        assert!(hint.content.hyperlinks);
+        assert!(hint.content.regex.is_some());
+        assert!(hint.post_processing);
+        assert!(!hint.persist);
+
+        let mouse = hint.mouse.unwrap();
+        assert!(mouse.enabled);
+        assert!(mouse.mods.0.is_empty());
+
+        let binding = hint.binding.as_ref().unwrap().key_binding(hint);
+        assert_eq!(binding.mods, ModifiersState::CONTROL | ModifiersState::SHIFT);
+        assert_eq!(binding.mode, BindingMode::empty());
+        assert_eq!(binding.notmode, BindingMode::empty());
+        assert_eq!(binding.action, Action::Hint(hint.clone()));
+        assert!(
+            matches!(binding.trigger, BindingKey::Keycode { key: Key::Character(ref key), .. } if key.as_ref() == "o")
+        );
+    }
 
     #[test]
     fn positive_url_parsing_regex_test() {

@@ -775,6 +775,68 @@ bindings = [++
 	{ mouse = _"Right"_, mods = _"Control"_, action = _"Paste"_ },++
 ]
 
+# OPEN
+
+This section documents the *[open]* table of the configuration file.
+
+Open actions control which program is used when opening URLs and hyperlinks.
+Rules are evaluated in order and the first matching rule is used. If no rule
+matches, _launcher_ is used.
+
+*launcher* = _"Default"_ | _"<string>"_ | { program = _"<string>"_, args = [_"<string>"_,] }
+
+	Fallback command used to open URLs and hyperlinks.
+
+	*Default*
+		Use the platform default opener. This is _xdg-open_ on Linux/BSD, _open_
+		on macOS, and _cmd /c start ""_ on Windows.
+
+	When a command is configured, the URL or hyperlink target is always attached
+	as the last argument.
+
+	Default: _"Default"_
+
+*actions* = [{ *<protocol>*, *<url>*, *<extension>*, *<command>* },]
+
+	Array with URL-specific open actions.
+
+	Each open action must have at least one of _protocol_, _url_, or _extension_,
+	and must define _command_. When multiple matchers are specified, all of them
+	must match.
+
+	*protocol* = _"<string>"_ | [_"<string>"_,]
+
+		URL scheme to match, like _"https"_, _"mailto"_, or _"file"_.
+
+	*url* = _"<string>"_
+
+		Regular expression matched against the full URL or hyperlink target.
+
+	*extension* = _"<string>"_ | [_"<string>"_,]
+
+		File extension to match, without the leading _._. Query strings and
+		fragments are ignored when extracting the extension.
+
+	*command* = _"<string>"_ | { program = _"<string>"_, args = [_"<string>"_,] }
+
+		Command to execute for matching URLs. The URL or hyperlink target is always
+		attached as the last argument.
+
+	Default: _[]_
+
+	Example:
+		*[open]*++
+launcher = _"Default"_++
+++
+[[open.actions]]++
+protocol = [_"http"_, _"https"_]++
+url = _"github\\.com"_++
+command = { program = _"firefox"_, args = [_"--new-tab"_] }++
+++
+[[open.actions]]++
+extension = _"pdf"_++
+command = _"zathura"_
+
 # HINTS
 
 This section documents the *[hints]* table of the configuration file.
@@ -814,8 +876,10 @@ _action_ or a _command_.
 
 		When this is _true_, hints remain persistent after selection.
 
-	*action* = _"Copy"_ | _"Paste"_ | _"Select"_ | _"MoveViModeCursor"_
+	*action* = _"Open"_ | _"Copy"_ | _"Paste"_ | _"Select"_ | _"MoveViModeCursor"_
 
+		*Open*
+			Open the hint's text using _[open]_ configuration.
 		*Copy*
 			Copy the hint's text to the clipboard.
 		*Paste*
@@ -848,9 +912,7 @@ _action_ or a _command_.
 
 	Default:
 		*[[hints.enabled]]*++
-command         = _"xdg-open"_ # On Linux/BSD++
-# command       = _"open"_ # On macOS++
-# command       = { program = _"cmd"_, args = [ _"/c"_, _"start"_, _""_ ] } # On Windows++
+action          = _"Open"_++
 hyperlinks      = _true_++
 post_processing = _true_++
 persist         = _false_++

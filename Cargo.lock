@@ -57,6 +57,7 @@ dependencies = [
  "parking_lot",
  "png",
  "polling",
+ "regex-automata",
  "serde",
  "serde_json",
  "serde_yaml",

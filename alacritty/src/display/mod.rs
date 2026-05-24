@@ -39,6 +39,7 @@ use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
 use crate::config::font::Font;
+use crate::config::ui_config::{HintAction, HintInternalAction};
 use crate::config::window::Dimensions;
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
@@ -814,6 +815,7 @@ impl Display {
         let size_info = self.size_info;
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
+        let hint_previews = self.hint_previews(&terminal);
 
         // Add damage from the terminal.
         match terminal.damage() {
@@ -1109,10 +1111,10 @@ impl Display {
 
         self.draw_render_timer(config);
 
-        // Draw hyperlink uri preview.
+        // Draw hint target preview.
         if has_highlighted_hint {
             let cursor_point = vi_cursor_point.or(Some(cursor_point));
-            self.draw_hyperlink_preview(config, cursor_point, display_offset);
+            self.draw_hint_previews(config, cursor_point, display_offset, hint_previews);
         }
 
         // Notify winit that we're about to present.
@@ -1338,29 +1340,41 @@ impl Display {
         bar_text
     }
 
-    /// Draw preview for the currently highlighted `Hyperlink`.
+    fn hint_previews<T>(&self, term: &Term<T>) -> Vec<String> {
+        self.highlighted_hint
+            .iter()
+            .chain(&self.vi_highlighted_hint)
+            .filter(|hint| {
+                hint.hyperlink().is_some()
+                    || matches!(hint.action(), HintAction::Action(HintInternalAction::Open))
+            })
+            .filter_map(|hint| hint.text(term).map(Into::into))
+            .collect()
+    }
+
+    /// Draw previews for the currently highlighted hints.
     #[inline(never)]
-    fn draw_hyperlink_preview(
+    fn draw_hint_previews(
         &mut self,
         config: &UiConfig,
         cursor_point: Option<Point>,
         display_offset: usize,
+        previews: Vec<String>,
     ) {
         let num_cols = self.size_info.columns();
-        let uris: Vec<_> = self
-            .highlighted_hint
+        let previews: Vec<_> = previews
             .iter()
-            .chain(&self.vi_highlighted_hint)
-            .filter_map(|hint| hint.hyperlink().map(|hyperlink| hyperlink.uri()))
-            .map(|uri| StrShortener::new(uri, num_cols, ShortenDirection::Right, Some(SHORTENER)))
+            .map(|preview| {
+                StrShortener::new(preview, num_cols, ShortenDirection::Right, Some(SHORTENER))
+            })
             .collect();
 
-        if uris.is_empty() {
+        if previews.is_empty() {
             return;
         }
 
         // The maximum amount of protected lines including the ones we'll show preview on.
-        let max_protected_lines = uris.len() * 2;
+        let max_protected_lines = previews.len() * 2;
 
         // Lines we shouldn't show preview on, because it'll obscure the highlighted hint.
         let mut protected_lines = Vec::with_capacity(max_protected_lines);
@@ -1385,20 +1399,27 @@ impl Display {
                     line
                 }
             })
-            .take(uris.len())
+            .take(previews.len())
             .flat_map(|line| term::point_to_viewport(display_offset, Point::new(line, Column(0))));
 
         let fg = config.colors.footer_bar_foreground();
         let bg = config.colors.footer_bar_background();
-        for (uri, point) in uris.into_iter().zip(uri_lines) {
-            // Damage the uri preview.
+        for (preview, point) in previews.into_iter().zip(uri_lines) {
+            // Damage the hint preview.
             let damage = LineDamageBounds::new(point.line, point.column.0, num_cols);
             self.damage_tracker.frame().damage_line(damage);
 
-            // Damage the uri preview for the next frame as well.
+            // Damage the hint preview for the next frame as well.
             self.damage_tracker.next_frame().damage_line(damage);
 
-            self.renderer.draw_string(point, fg, bg, uri, &self.size_info, &mut self.glyph_cache);
+            self.renderer.draw_string(
+                point,
+                fg,
+                bg,
+                preview,
+                &self.size_info,
+                &mut self.glyph_cache,
+            );
         }
     }
 

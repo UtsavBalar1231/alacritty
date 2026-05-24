@@ -1746,6 +1746,14 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 args.push(text.into());
                 self.spawn_daemon(command.program(), &args);
             },
+            // Open the hint text using the configured URL opener.
+            HintAction::Action(HintInternalAction::Open) => {
+                let Some(command) = self.config.open.resolve(&text) else {
+                    warn!("Unable to open invalid URL target: {text:?}");
+                    return;
+                };
+                self.spawn_daemon(&command.program, &command.args);
+            },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
                 self.clipboard.store(ClipboardType::Clipboard, text);

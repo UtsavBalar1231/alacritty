@@ -597,6 +597,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn highlighted_at_finds_default_plain_url_hint() {
+        let config = UiConfig::default();
+        let term = mock_term("open https://example.org now");
+        let point = Point::new(Line(0), Column(10));
+
+        let hint = highlighted_at(&term, &config, point, ModifiersState::empty()).unwrap();
+
+        assert_eq!(hint.text(&term).unwrap(), "https://example.org");
+    }
+
+    #[test]
+    fn highlighted_at_post_processes_plain_url_hint() {
+        let config = UiConfig::default();
+        let term = mock_term("open https://example.org. now");
+        let point = Point::new(Line(0), Column(10));
+
+        let hint = highlighted_at(&term, &config, point, ModifiersState::empty()).unwrap();
+
+        assert_eq!(hint.text(&term).unwrap(), "https://example.org");
+    }
+
+    #[test]
+    fn highlighted_at_prefers_osc8_uri_over_plain_url_hint() {
+        let config = UiConfig::default();
+        let mut term = mock_term("https://visible.example");
+        let hyperlink = Hyperlink::new(None::<String>, String::from("https://target.example"));
+        term.goto(0, 0);
+        term.set_hyperlink(Some(hyperlink.into()));
+        for character in "https://visible.example".chars() {
+            term.input(character);
+        }
+        term.set_hyperlink(None);
+
+        let hint = highlighted_at(
+            &term,
+            &config,
+            Point::new(Line(0), Column(10)),
+            ModifiersState::empty(),
+        )
+        .unwrap();
+
+        assert_eq!(hint.text(&term).unwrap(), "https://target.example");
+    }
+
+    #[test]
     fn hint_label_generation() {
         let mut generator = HintLabels::new("0123", 0.5);
 
