@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use crossfont::Size as FontSize;
@@ -42,6 +43,9 @@ pub struct Font {
 
     /// Whether to use the built-in font for box drawing characters.
     pub builtin_box_drawing: bool,
+
+    /// Explicit font mappings for symbol ranges.
+    pub symbol_map: HashMap<String, String>,
 }
 
 impl Font {
@@ -80,6 +84,7 @@ impl Default for Font {
     fn default() -> Font {
         Self {
             builtin_box_drawing: true,
+            symbol_map: Default::default(),
             glyph_offset: Default::default(),
             use_thin_strokes: Default::default(),
             bold_italic: Default::default(),

@@ -386,6 +386,15 @@ macOS:     { family = _"Menlo"_,     style = _"Regular"_ }
 
 	Default: _true_
 
+*symbol_map* = { _"U+E000-U+F8FF"_ = _"Symbols Nerd Font"_ }
+
+	Explicit font mappings for symbol ranges. Keys are Unicode codepoint ranges
+	in _U+XXXX_ or _U+XXXX-U+YYYY_ form and values are font family names.
+	Mapped fonts are used for matching codepoints without changing the terminal
+	cell size derived from the normal font.
+
+	Default: _{}_
+
 # COLORS
 
 This section documents the *[colors]* table of the configuration file.

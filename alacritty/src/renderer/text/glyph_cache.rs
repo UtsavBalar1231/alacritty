@@ -5,7 +5,7 @@ use crossfont::{
     Error as RasterizerError, FontDesc, FontKey, GlyphKey, Metrics, Rasterize, RasterizedGlyph,
     Rasterizer, Size, Slant, Style, Weight,
 };
-use log::{error, info};
+use log::{debug, error, info};
 use unicode_width::UnicodeWidthChar;
 
 use crate::config::font::{Font, FontDescription};
@@ -76,11 +76,22 @@ pub struct GlyphCache {
 
     /// Whether to use the built-in font for box drawing characters.
     builtin_box_drawing: bool,
+
+    /// Explicit font mappings for symbol ranges.
+    symbol_map: Vec<SymbolFont>,
+}
+
+struct SymbolFont {
+    start: u32,
+    end: u32,
+    family: String,
+    key: FontKey,
 }
 
 impl GlyphCache {
     pub fn new(mut rasterizer: Rasterizer, font: &Font) -> Result<GlyphCache, crossfont::Error> {
         let (regular, bold, italic, bold_italic) = Self::compute_font_keys(font, &mut rasterizer)?;
+        let symbol_map = Self::load_symbol_map(font, &mut rasterizer);
 
         let metrics = GlyphCache::load_font_metrics(&mut rasterizer, font, regular)?;
         Ok(Self {
@@ -95,6 +106,7 @@ impl GlyphCache {
             glyph_offset: font.glyph_offset,
             metrics,
             builtin_box_drawing: font.builtin_box_drawing,
+            symbol_map,
         })
     }
 
@@ -188,6 +200,39 @@ impl GlyphCache {
         FontDesc::new(desc.family.clone(), style)
     }
 
+    fn load_symbol_map(font: &Font, rasterizer: &mut Rasterizer) -> Vec<SymbolFont> {
+        let mut symbol_map = Vec::with_capacity(font.symbol_map.len());
+
+        for (range, family) in &font.symbol_map {
+            let Some((start, end)) = parse_symbol_range(range) else {
+                error!("Invalid font symbol map range: {range:?}");
+                continue;
+            };
+
+            let desc = FontDesc::new(family.clone(), Style::Description {
+                slant: Slant::Normal,
+                weight: Weight::Normal,
+            });
+
+            match rasterizer.load_font(&desc, font.size()) {
+                Ok(key) => {
+                    debug!("Loaded symbol font {family:?} for range {range:?}");
+                    symbol_map.push(SymbolFont { start, end, family: family.clone(), key });
+                },
+                Err(err) => error!("Failed to load symbol font {family:?}: {err}"),
+            }
+        }
+
+        symbol_map.sort_by_key(|font| (font.start, font.end));
+
+        symbol_map
+    }
+
+    fn symbol_font_index(&self, character: char) -> Option<usize> {
+        let character = character as u32;
+        self.symbol_map.iter().position(|font| character >= font.start && character <= font.end)
+    }
+
     /// Get a glyph from the font.
     ///
     /// If the glyph has never been loaded before, it will be rasterized and inserted into the
@@ -206,20 +251,34 @@ impl GlyphCache {
             return *glyph;
         };
 
-        // Rasterize the glyph using the built-in font for special characters or the user's font
-        // for everything else.
+        // Rasterize the glyph using an explicitly mapped symbol font, the built-in font for
+        // special characters, or the user's font for everything else.
         let rasterized = self
-            .builtin_box_drawing
-            .then(|| {
-                builtin_font::builtin_glyph(
-                    glyph_key.character,
-                    &self.metrics,
-                    &self.font_offset,
-                    &self.glyph_offset,
-                )
+            .symbol_font_index(glyph_key.character)
+            .map(|index| {
+                let symbol_font = &self.symbol_map[index];
+                let symbol_key = GlyphKey { font_key: symbol_font.key, ..glyph_key };
+                let family = symbol_font.family.clone();
+
+                let rasterized = self.rasterizer.get_glyph(symbol_key);
+                if rasterized.is_ok() {
+                    debug!("Loaded glyph {:?} from symbol font {:?}", glyph_key.character, family,);
+                }
+                rasterized
             })
-            .flatten()
-            .map_or_else(|| self.rasterizer.get_glyph(glyph_key), Ok);
+            .unwrap_or_else(|| {
+                self.builtin_box_drawing
+                    .then(|| {
+                        builtin_font::builtin_glyph(
+                            glyph_key.character,
+                            &self.metrics,
+                            &self.font_offset,
+                            &self.glyph_offset,
+                        )
+                    })
+                    .flatten()
+                    .map_or_else(|| self.rasterizer.get_glyph(glyph_key), Ok)
+            });
 
         let glyph = match rasterized {
             Ok(rasterized) => self.load_glyph(loader, rasterized),
@@ -300,6 +359,7 @@ impl GlyphCache {
         self.bold_italic_key = bold_italic;
         self.metrics = metrics;
         self.builtin_box_drawing = font.builtin_box_drawing;
+        self.symbol_map = Self::load_symbol_map(font, &mut self.rasterizer);
 
         Ok(())
     }
@@ -314,5 +374,33 @@ impl GlyphCache {
         self.load_glyphs_for_font(self.bold_key, loader);
         self.load_glyphs_for_font(self.italic_key, loader);
         self.load_glyphs_for_font(self.bold_italic_key, loader);
+    }
+}
+
+fn parse_symbol_range(range: &str) -> Option<(u32, u32)> {
+    let range = range.trim();
+    let (start, end) = range.split_once('-').unwrap_or((range, range));
+    let start = parse_codepoint(start)?;
+    let end = parse_codepoint(end)?;
+
+    (start <= end && char::from_u32(start).is_some() && char::from_u32(end).is_some())
+        .then_some((start, end))
+}
+
+fn parse_codepoint(codepoint: &str) -> Option<u32> {
+    u32::from_str_radix(codepoint.trim().strip_prefix("U+")?, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_symbol_range;
+
+    #[test]
+    fn parse_symbol_ranges() {
+        assert_eq!(parse_symbol_range("U+E000-U+F8FF"), Some((0xE000, 0xF8FF)));
+        assert_eq!(parse_symbol_range("U+F0000"), Some((0xF0000, 0xF0000)));
+        assert_eq!(parse_symbol_range("U+F8FF-U+E000"), None);
+        assert_eq!(parse_symbol_range("E000-F8FF"), None);
+        assert_eq!(parse_symbol_range("U+110000"), None);
     }
 }
