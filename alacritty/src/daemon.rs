@@ -67,9 +67,55 @@ where
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
-    let working_directory = foreground_process_path(master_fd, shell_pid)
-        .ok()
-        .and_then(|path| CString::new(path.into_os_string().into_vec()).ok());
+    let working_directory = foreground_process_path(master_fd, shell_pid).ok();
+    spawn_daemon_command(command, working_directory)
+}
+
+/// Start a new process in the background with additional environment variables.
+#[cfg(not(windows))]
+pub fn spawn_daemon_with_env<I, S, E, K, V>(
+    program: &str,
+    args: I,
+    envs: E,
+    working_directory: Option<PathBuf>,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = S> + Copy,
+    S: AsRef<OsStr>,
+    E: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let mut command = Command::new(program);
+    command.args(args).envs(envs).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+
+    spawn_daemon_command(command, working_directory)
+}
+
+/// Start a new process in the background from a known working directory.
+#[cfg(not(windows))]
+pub fn spawn_daemon_with_working_directory<I, S>(
+    program: &str,
+    args: I,
+    working_directory: Option<PathBuf>,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = S> + Copy,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+
+    spawn_daemon_command(command, working_directory)
+}
+
+#[cfg(not(windows))]
+fn spawn_daemon_command(
+    mut command: Command,
+    working_directory: Option<PathBuf>,
+) -> io::Result<()> {
+    let working_directory =
+        working_directory.and_then(|path| CString::new(path.into_os_string().into_vec()).ok());
 
     unsafe {
         command

@@ -17,6 +17,8 @@ use glutin::platform::x11::X11GlConfigExt;
 use log::info;
 use serde_json as json;
 use winit::event::{ElementState, Event as WinitEvent, Modifiers, MouseButton, WindowEvent};
+#[cfg(not(any(target_os = "macos", windows)))]
+use winit::event_loop::AsyncRequestSerial;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::WindowId;
@@ -41,6 +43,8 @@ use crate::event::{
     ActionContext, Event, EventProxy, EventType, InlineSearchState, Mouse, SearchState,
     TouchPurpose,
 };
+#[cfg(not(any(target_os = "macos", windows)))]
+use crate::event::{ActivationOpenRequest, PendingActivationOpen};
 #[cfg(unix)]
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
@@ -382,6 +386,8 @@ pub struct WindowContext {
     tabs: TabManager<TerminalSession>,
     tab_bar: crate::display::TabBarState,
     tab_bar_mouse_grab: bool,
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pending_activation_opens: Vec<PendingActivationOpen>,
     modifiers: Modifiers,
     mouse: Mouse,
     touch: TouchPurpose,
@@ -523,6 +529,8 @@ impl WindowContext {
             tabs,
             tab_bar: Default::default(),
             tab_bar_mouse_grab: Default::default(),
+            #[cfg(not(any(target_os = "macos", windows)))]
+            pending_activation_opens: Default::default(),
         })
     }
 
@@ -619,6 +627,27 @@ impl WindowContext {
     #[cfg(unix)]
     pub fn config(&self) -> &UiConfig {
         &self.active_session().config
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub fn take_pending_activation_open(
+        &mut self,
+        serial: AsyncRequestSerial,
+    ) -> Option<PendingActivationOpen> {
+        let index = self.pending_activation_opens.iter().position(|pending| {
+            matches!(pending.request, ActivationOpenRequest::Winit(request) if request == serial)
+        })?;
+        Some(self.pending_activation_opens.remove(index))
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub fn has_pending_activation_opens(&self) -> bool {
+        !self.pending_activation_opens.is_empty()
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub fn drain_pending_activation_opens(&mut self) -> Vec<PendingActivationOpen> {
+        std::mem::take(&mut self.pending_activation_opens)
     }
 
     /// Clear the window config overrides.
@@ -1351,6 +1380,8 @@ impl WindowContext {
                 dirty: &mut self.dirty,
                 occluded: &mut self.occluded,
                 terminal: &mut terminal,
+                #[cfg(not(any(target_os = "macos", windows)))]
+                pending_activation_opens: &mut self.pending_activation_opens,
                 #[cfg(not(windows))]
                 master_fd: session.master_fd,
                 #[cfg(not(windows))]

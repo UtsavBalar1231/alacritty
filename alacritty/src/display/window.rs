@@ -1,6 +1,6 @@
 #[cfg(not(any(target_os = "macos", windows)))]
 use winit::platform::startup_notify::{
-    self, EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
+    self, EventLoopExtStartupNotify, WindowAttributesExtStartupNotify, WindowExtStartupNotify,
 };
 #[cfg(not(any(target_os = "macos", windows)))]
 use winit::window::ActivationToken;
@@ -30,6 +30,8 @@ use {
 use bitflags::bitflags;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(any(target_os = "macos", windows)))]
+use winit::event_loop::AsyncRequestSerial;
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
@@ -220,6 +222,15 @@ impl Window {
     #[inline]
     pub fn raw_window_handle(&self) -> RawWindowHandle {
         self.window.window_handle().unwrap().as_raw()
+    }
+
+    /// Request an activation token for launching a child process.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[inline]
+    pub fn request_activation_token(
+        &self,
+    ) -> std::result::Result<AsyncRequestSerial, winit::error::NotSupportedError> {
+        self.window.request_activation_token()
     }
 
     #[inline]

@@ -28,6 +28,7 @@ pub enum Topic {
     DelayedSearch,
     BlinkCursor,
     BlinkTimeout,
+    ActivationOpen,
     Frame,
 }
 

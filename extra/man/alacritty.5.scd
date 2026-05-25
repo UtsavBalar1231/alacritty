@@ -789,7 +789,9 @@ matches, _launcher_ is used.
 
 	*Default*
 		Use the platform default opener. This is _xdg-open_ on Linux/BSD, _open_
-		on macOS, and _cmd /c start ""_ on Windows.
+		on macOS, and _cmd /c start ""_ on Windows. On Linux/BSD, Alacritty
+		passes desktop activation tokens to _xdg-open_ when supported by the
+		windowing system.
 
 	When a command is configured, the URL or hyperlink target is always attached
 	as the last argument.
@@ -828,7 +830,9 @@ matches, _launcher_ is used.
 
 		*External*
 			Run _command_ as an external process. This preserves the behavior of
-			open actions without an explicit _mode_.
+			open actions without an explicit _mode_. On Linux/BSD, external
+			commands receive desktop activation tokens when supported by the
+			windowing system.
 
 		*Tab*
 			Open a new Alacritty tab running _command_ with the URL or hyperlink

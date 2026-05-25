@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 #[cfg(unix)]
 use std::sync::Arc;
+#[cfg(not(any(target_os = "macos", windows)))]
+use std::thread;
 use std::time::{Duration, Instant};
 use std::{env, f32, mem};
 
@@ -30,8 +32,12 @@ use winit::event::{
     ElementState, Event as WinitEvent, Ime, Modifiers, MouseButton, StartCause,
     Touch as TouchEvent, WindowEvent,
 };
+#[cfg(not(any(target_os = "macos", windows)))]
+use winit::event_loop::AsyncRequestSerial;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop, EventLoopProxy};
 use winit::raw_window_handle::HasDisplayHandle;
+#[cfg(not(any(target_os = "macos", windows)))]
+use winit::window::ActivationToken;
 use winit::window::WindowId;
 
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
@@ -55,9 +61,11 @@ use crate::config::ui_config::{HintAction, HintInternalAction};
 #[cfg(target_os = "macos")]
 use crate::config::window::Decorations;
 use crate::config::{self, UiConfig};
-#[cfg(not(windows))]
-use crate::daemon::foreground_process_path;
 use crate::daemon::spawn_daemon;
+#[cfg(not(windows))]
+use crate::daemon::{
+    foreground_process_path, spawn_daemon_with_env, spawn_daemon_with_working_directory,
+};
 use crate::display::color::Rgb;
 use crate::display::hint::HintMatch;
 use crate::display::window::{ImeInhibitor, Window};
@@ -85,6 +93,16 @@ const TOUCH_ZOOM_FACTOR: f32 = 0.01;
 
 /// Cooldown between invocations of the bell command.
 const BELL_CMD_COOLDOWN: Duration = Duration::from_millis(100);
+
+/// Maximum time to wait for a desktop activation token before opening without one.
+#[cfg(not(any(target_os = "macos", windows)))]
+const ACTIVATION_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[cfg(not(any(target_os = "macos", windows)))]
+const XDG_ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
+
+#[cfg(not(any(target_os = "macos", windows)))]
+const DESKTOP_STARTUP_ID_ENV: &str = "DESKTOP_STARTUP_ID";
 
 /// The event processor.
 ///
@@ -248,6 +266,37 @@ impl Processor {
         self.next_terminal_id += 1;
 
         SessionIds::new(tab_id, terminal_id)
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    fn handle_activation_token(
+        &mut self,
+        window_id: WindowId,
+        serial: AsyncRequestSerial,
+        token: ActivationToken,
+    ) {
+        let Some((pending, has_pending_opens)) =
+            self.windows.get_mut(&window_id).and_then(|window_context| {
+                let pending = window_context.take_pending_activation_open(serial)?;
+                Some((pending, window_context.has_pending_activation_opens()))
+            })
+        else {
+            return;
+        };
+
+        if !has_pending_opens {
+            self.scheduler.unschedule(TimerId::new(Topic::ActivationOpen, window_id));
+        }
+        self.spawn_pending_activation_open(pending, Some(token));
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    fn spawn_pending_activation_open(&self, pending: PendingActivationOpen, token: Option<ActivationToken>) {
+        spawn_external_open(
+            pending.command,
+            pending.working_directory,
+            token.map(ActivationToken::into_raw),
+        );
     }
 
     #[cfg(unix)]
@@ -499,6 +548,12 @@ impl ApplicationHandler<Event> for Processor {
             info!(target: LOG_TARGET_WINIT, "{event:?}");
         }
 
+        #[cfg(not(any(target_os = "macos", windows)))]
+        if let WindowEvent::ActivationTokenDone { serial, token } = &event {
+            self.handle_activation_token(window_id, *serial, token.clone());
+            return;
+        }
+
         // Ignore all events we do not care about.
         if Self::skip_window_event(&event) {
             return;
@@ -645,6 +700,17 @@ impl ApplicationHandler<Event> for Processor {
             },
             #[cfg(unix)]
             (EventType::IpcTab(request, stream), _) => self.handle_ipc_tab_request(request, stream),
+            #[cfg(not(any(target_os = "macos", windows)))]
+            (EventType::ActivationOpenTimeout, Some(window_id)) => {
+                let pending = match self.windows.get_mut(window_id) {
+                    Some(window_context) => window_context.drain_pending_activation_opens(),
+                    None => Vec::new(),
+                };
+
+                for pending in pending {
+                    self.spawn_pending_activation_open(pending, None);
+                }
+            },
             (EventType::ConfigReload(path), _) => {
                 // Clear config logs from message bar for all terminals.
                 for window_context in self.windows.values_mut() {
@@ -719,8 +785,16 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::CloseWindow, Some(window_id)) => {
-                if let Some(window_context) = self.windows.remove(window_id) {
+                if let Some(mut window_context) = self.windows.remove(window_id) {
+                    #[cfg(not(any(target_os = "macos", windows)))]
+                    let pending_activation_opens = window_context.drain_pending_activation_opens();
+
                     self.scheduler.unschedule_window(window_context.id());
+                    #[cfg(not(any(target_os = "macos", windows)))]
+                    for pending in pending_activation_opens {
+                        self.spawn_pending_activation_open(pending, None);
+                    }
+
                     if self.windows.is_empty() && !self.cli_options.daemon {
                         if self.config.debug.ref_test {
                             window_context.write_ref_test_results();
@@ -758,6 +832,8 @@ impl ApplicationHandler<Event> for Processor {
                 | EventType::MoveTabRight,
                 None,
             ) => (),
+            #[cfg(not(any(target_os = "macos", windows)))]
+            (EventType::ActivationOpenTimeout, None) => (),
             // Shutdown all windows.
             #[cfg(unix)]
             (EventType::Shutdown, _) => event_loop.exit(),
@@ -815,7 +891,7 @@ impl ApplicationHandler<Event> for Processor {
                 }
 
                 // Remove the closed terminal.
-                let window_context = match self.windows.entry(*window_id) {
+                let mut window_context = match self.windows.entry(*window_id) {
                     // Don't exit when terminal exits if user asked to hold the window.
                     Entry::Occupied(window_context)
                         if !window_context.get().display.window.hold =>
@@ -825,8 +901,16 @@ impl ApplicationHandler<Event> for Processor {
                     _ => return,
                 };
 
+                #[cfg(not(any(target_os = "macos", windows)))]
+                let pending_activation_opens = window_context.drain_pending_activation_opens();
+
                 // Unschedule pending events.
                 self.scheduler.unschedule_window(window_context.id());
+
+                #[cfg(not(any(target_os = "macos", windows)))]
+                for pending in pending_activation_opens {
+                    self.spawn_pending_activation_open(pending, None);
+                }
 
                 // Shutdown if no more terminals are open.
                 if self.windows.is_empty() && !self.cli_options.daemon {
@@ -1000,12 +1084,30 @@ pub enum EventType {
     IpcGetConfig(Arc<UnixStream>),
     #[cfg(unix)]
     IpcTab(IpcTabRequest, Arc<UnixStream>),
+    #[cfg(not(any(target_os = "macos", windows)))]
+    ActivationOpenTimeout,
     BlinkCursor,
     BlinkCursorTimeout,
     SearchNext,
     #[cfg(unix)]
     Shutdown,
     Frame,
+}
+
+/// External URL opener waiting for a desktop activation token.
+#[cfg(not(any(target_os = "macos", windows)))]
+#[derive(Debug)]
+pub struct PendingActivationOpen {
+    pub request: ActivationOpenRequest,
+    pub command: ResolvedOpen,
+    pub working_directory: Option<PathBuf>,
+}
+
+/// Source of a pending desktop activation token request.
+#[cfg(not(any(target_os = "macos", windows)))]
+#[derive(Debug)]
+pub enum ActivationOpenRequest {
+    Winit(AsyncRequestSerial),
 }
 
 /// Tab IPC request dispatched to the event loop.
@@ -1022,6 +1124,55 @@ pub enum IpcTabRequest {
 impl From<TerminalEvent> for EventType {
     fn from(event: TerminalEvent) -> Self {
         Self::Terminal(event)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn spawn_external_open(
+    command: ResolvedOpen,
+    working_directory: Option<PathBuf>,
+    activation_token: Option<String>,
+) {
+    if let Err(err) = thread::Builder::new().name("alacritty-url-open".into()).spawn(move || {
+        spawn_external_open_blocking(command, working_directory, activation_token);
+    }) {
+        warn!("Unable to spawn URL opener thread: {err}");
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn spawn_external_open_blocking(
+    command: ResolvedOpen,
+    working_directory: Option<PathBuf>,
+    activation_token: Option<String>,
+) {
+    let activation_token = activation_token.as_deref();
+
+    let result = match activation_token {
+        Some(token) => spawn_daemon_with_env(
+            &command.program,
+            &command.args,
+            [(DESKTOP_STARTUP_ID_ENV, token), (XDG_ACTIVATION_TOKEN_ENV, token)],
+            working_directory,
+        ),
+        None => {
+            spawn_daemon_with_working_directory(&command.program, &command.args, working_directory)
+        },
+    };
+
+    match result {
+        Ok(_) => debug!(
+            "Launched {} with args {:?}{}",
+            command.program,
+            command.args,
+            if activation_token.is_some() { " and activation token" } else { "" }
+        ),
+        Err(err) => warn!(
+            "Unable to launch {} with args {:?}{}: {err}",
+            command.program,
+            command.args,
+            if activation_token.is_some() { " and activation token" } else { "" }
+        ),
     }
 }
 
@@ -1142,6 +1293,8 @@ pub struct ActionContext<'a, N, T> {
     pub dirty: &'a mut bool,
     pub occluded: &'a mut bool,
     pub preserve_title: bool,
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub pending_activation_opens: &'a mut Vec<PendingActivationOpen>,
     #[cfg(not(windows))]
     pub master_fd: RawFd,
     #[cfg(not(windows))]
@@ -2013,6 +2166,33 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     fn open_external(&mut self, command: ResolvedOpen) {
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let working_directory = foreground_process_path(self.master_fd, self.shell_pid).ok();
+
+            match self.display.window.request_activation_token() {
+                Ok(serial) => {
+                    self.pending_activation_opens.push(PendingActivationOpen {
+                        request: ActivationOpenRequest::Winit(serial),
+                        command,
+                        working_directory,
+                    });
+
+                    let timer_id = TimerId::new(Topic::ActivationOpen, self.display.window.id());
+                    if !self.scheduler.scheduled(timer_id) {
+                        let event =
+                            Event::new(EventType::ActivationOpenTimeout, self.display.window.id());
+                        self.scheduler.schedule(event, ACTIVATION_OPEN_TIMEOUT, false, timer_id);
+                    }
+                },
+                Err(err) => {
+                    debug!("Unable to request activation token for URL opener: {err}");
+                    spawn_external_open(command, working_directory, None);
+                },
+            }
+        }
+
+        #[cfg(any(target_os = "macos", windows))]
         self.spawn_daemon(&command.program, &command.args);
     }
 
@@ -2500,6 +2680,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::MoveTabLeft
                 | EventType::MoveTabRight
                 | EventType::Frame => (),
+                #[cfg(not(any(target_os = "macos", windows)))]
+                EventType::ActivationOpenTimeout => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {

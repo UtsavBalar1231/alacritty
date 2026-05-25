@@ -21,6 +21,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Tab title templates, activity indicators, overflow markers, and move-left/right actions
 - Configurable URL opening actions and hover previews for plain text URLs
 - Open actions can launch matching URLs in a new Alacritty tab or window
+- Desktop activation tokens for external URL opening on Linux/BSD when available
 
 ### Changed
 
