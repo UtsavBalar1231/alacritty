@@ -23,55 +23,55 @@ path = "../alacritty_config"
 version = "0.2.4-dev"
 
 [dependencies]
-ahash = { version = "0.8.6", features = ["no-rng"] }
-bitflags = "2.2.1"
-clap = { version = "4.2.7", features = ["derive", "env"] }
-copypasta = { version = "0.10.1", default-features = false }
+ahash = { version = "0.8.12", features = ["no-rng"] }
+bitflags = "2.11.1"
+clap = { version = "4.6.1", features = ["derive", "env"] }
+copypasta = { version = "0.10.2", default-features = false }
 crossfont = "0.8.1"
-glutin = { version = "0.32.2", default-features = false, features = ["egl", "wgl"] }
-home = "0.5.5"
-libc = "0.2"
-log = { version = "0.4", features = ["std", "serde"] }
-notify = "8.0.0"
-parking_lot = "0.12.0"
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "wgl"] }
+home = "0.5.12"
+libc = "0.2.186"
+log = { version = "0.4.30", features = ["std", "serde"] }
+notify = "8.2.0"
+parking_lot = "0.12.5"
 polling = "3.11.0"
-regex-automata = "0.4.3"
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9.25"
-signal-hook = { version = "0.4.3", default-features = false }
-tempfile = "3.12.0"
+regex-automata = "0.4.14"
+serde_json = "1.0.150"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9.34"
+signal-hook = { version = "0.4.4", default-features = false }
+tempfile = "3.27.0"
 toml.workspace = true
 toml_edit.workspace = true
-unicode-width = "0.2.0"
-winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "serde"] }
+unicode-width = "0.2.2"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "serde"] }
 
 [build-dependencies]
 gl_generator = "0.14.0"
 
 [dev-dependencies]
-clap_complete = "4.2.3"
+clap_complete = "4.6.5"
 
 [target.'cfg(not(windows))'.dependencies]
 xdg = "3.0.0"
 
 [target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
-wayland-backend = { version = "0.3.11", features = ["client_system"], optional = true }
-wayland-client = { version = "0.31.11", optional = true }
-wayland-protocols = { version = "0.32.9", features = ["client", "staging"], optional = true }
+wayland-backend = { version = "0.3.15", features = ["client_system"], optional = true }
+wayland-client = { version = "0.31.14", optional = true }
+wayland-protocols = { version = "0.32.12", features = ["client", "staging"], optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-png = { version = "0.17.5", default-features = false, optional = true }
+png = { version = "0.18.1", default-features = false, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.1"
-objc2-foundation = { version = "0.3.1", default-features = false, features = [
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSString",
     "NSLocale",
     "NSUserDefaults",
 ] }
-objc2-app-kit = { version = "0.3.1", default-features = false, features = [
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSColorSpace",
     "NSResponder",
@@ -81,7 +81,7 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
 
 [target.'cfg(windows)'.dependencies]
 dirs = "6.0.0"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
     "Win32_System_Console",
@@ -89,7 +89,7 @@ windows-sys = { version = "0.59", features = [
 ]}
 
 [target.'cfg(windows)'.build-dependencies]
-embed-resource = "3.0.2"
+embed-resource = "3.0.9"
 
 [features]
 default = ["wayland", "x11"]

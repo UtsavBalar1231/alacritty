@@ -316,18 +316,18 @@ fn push_tab_segments(
             end_column: end,
             is_close_button: false,
         });
-        if let Some(close_start) = close_start.map(|close_start| start + close_start) {
-            if close_start < end {
-                close_regions.push((tab.id, close_start, close_start + 1));
-                segments.push(TabBarSegment {
-                    text: "×".into(),
-                    active: tab.active,
-                    tab_id: Some(tab.id),
-                    start_column: close_start,
-                    end_column: close_start + 1,
-                    is_close_button: true,
-                });
-            }
+        if let Some(close_start) = close_start.map(|close_start| start + close_start)
+            && close_start < end
+        {
+            close_regions.push((tab.id, close_start, close_start + 1));
+            segments.push(TabBarSegment {
+                text: "×".into(),
+                active: tab.active,
+                tab_id: Some(tab.id),
+                start_column: close_start,
+                end_column: close_start + 1,
+                is_close_button: true,
+            });
         }
 
         column = end;

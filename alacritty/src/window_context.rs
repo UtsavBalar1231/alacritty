@@ -986,11 +986,11 @@ impl WindowContext {
                             && !terminal.is_focused;
                         ring = true;
                     }
-                    if let Some(bell_command) = &session.config.bell.command {
-                        if session.prev_bell_cmd.is_none_or(|i| i.elapsed() >= BELL_CMD_COOLDOWN) {
-                            session.spawn_daemon(bell_command.program(), bell_command.args());
-                            session.prev_bell_cmd = Some(Instant::now());
-                        }
+                    if let Some(bell_command) = &session.config.bell.command
+                        && session.prev_bell_cmd.is_none_or(|i| i.elapsed() >= BELL_CMD_COOLDOWN)
+                    {
+                        session.spawn_daemon(bell_command.program(), bell_command.args());
+                        session.prev_bell_cmd = Some(Instant::now());
                     }
                 }
                 if urgent {

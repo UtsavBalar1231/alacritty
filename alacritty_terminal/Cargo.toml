@@ -15,27 +15,27 @@ default = ["serde"]
 serde = ["dep:serde", "bitflags/serde", "vte/serde"]
 
 [dependencies]
-base64 = "0.22.0"
-bitflags = "2.4.1"
-home = "0.5.5"
-libc = "0.2"
-log = "0.4"
-parking_lot = "0.12.0"
-polling = "3.8.0"
-regex-automata = "0.4.3"
-unicode-width = "0.2.0"
+base64 = "0.22.1"
+bitflags = "2.11.1"
+home = "0.5.12"
+libc = "0.2.186"
+log = "0.4.30"
+parking_lot = "0.12.5"
+polling = "3.11.0"
+regex-automata = "0.4.14"
+unicode-width = "0.2.2"
 vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
 serde = { version = "1", features = ["derive", "rc"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix-openpty = "0.2.0"
-rustix = { version = "1.0.0", default-features = false, features = ["std"] }
-signal-hook = "0.4.3"
+rustix = { version = "1.1.4", default-features = false, features = ["std"] }
+signal-hook = "0.4.4"
 
 [target.'cfg(windows)'.dependencies]
-piper = "0.2.1"
-miow = "0.6.0"
-windows-sys = { version = "0.59.0", features = [
+piper = "0.2.5"
+miow = "0.6.1"
+windows-sys = { version = "0.61.2", features = [
     "Win32_System_Console",
     "Win32_Foundation",
     "Win32_Security",
@@ -45,4 +45,4 @@ windows-sys = { version = "0.59.0", features = [
 ]}
 
 [dev-dependencies]
-serde_json = "1.0.0"
+serde_json = "1.0.150"
