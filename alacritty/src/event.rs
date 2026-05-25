@@ -98,6 +98,10 @@ const BELL_CMD_COOLDOWN: Duration = Duration::from_millis(100);
 #[cfg(not(any(target_os = "macos", windows)))]
 const ACTIVATION_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Polling interval for Wayland serial-backed activation token requests.
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+const SERIAL_ACTIVATION_OPEN_POLL: Duration = Duration::from_millis(10);
+
 #[cfg(not(any(target_os = "macos", windows)))]
 const XDG_ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
 
@@ -290,8 +294,46 @@ impl Processor {
         self.spawn_pending_activation_open(pending, Some(token));
     }
 
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    fn handle_serial_activation_open_poll(&mut self, window_id: WindowId) {
+        let Some((pending_with_token, has_pending_serial_activation_open, has_pending_opens)) =
+            self.windows.get_mut(&window_id).map(|window_context| {
+                let token = window_context.display.window.poll_serial_activation_token();
+                let pending_with_token = match token {
+                    Some(token) => window_context
+                        .take_pending_serial_activation_open()
+                        .map(|pending| (pending, token)),
+                    None => None,
+                };
+                (
+                    pending_with_token,
+                    window_context.has_pending_serial_activation_open(),
+                    window_context.has_pending_activation_opens(),
+                )
+            })
+        else {
+            return;
+        };
+
+        if let Some((pending, token)) = pending_with_token {
+            self.spawn_pending_activation_open(pending, Some(ActivationToken::from_raw(token)));
+        }
+
+        if has_pending_serial_activation_open {
+            let timer_id = TimerId::new(Topic::ActivationOpenPoll, window_id);
+            let event = Event::new(EventType::ActivationOpenPoll, window_id);
+            self.scheduler.schedule(event, SERIAL_ACTIVATION_OPEN_POLL, false, timer_id);
+        } else if !has_pending_opens {
+            self.scheduler.unschedule(TimerId::new(Topic::ActivationOpen, window_id));
+        }
+    }
+
     #[cfg(not(any(target_os = "macos", windows)))]
-    fn spawn_pending_activation_open(&self, pending: PendingActivationOpen, token: Option<ActivationToken>) {
+    fn spawn_pending_activation_open(
+        &self,
+        pending: PendingActivationOpen,
+        token: Option<ActivationToken>,
+    ) {
         spawn_external_open(
             pending.command,
             pending.working_directory,
@@ -702,14 +744,28 @@ impl ApplicationHandler<Event> for Processor {
             (EventType::IpcTab(request, stream), _) => self.handle_ipc_tab_request(request, stream),
             #[cfg(not(any(target_os = "macos", windows)))]
             (EventType::ActivationOpenTimeout, Some(window_id)) => {
+                #[cfg(feature = "wayland")]
+                self.scheduler.unschedule(TimerId::new(Topic::ActivationOpenPoll, *window_id));
+
                 let pending = match self.windows.get_mut(window_id) {
-                    Some(window_context) => window_context.drain_pending_activation_opens(),
+                    Some(window_context) => {
+                        #[cfg(feature = "wayland")]
+                        if window_context.has_pending_serial_activation_open() {
+                            window_context.display.window.cancel_serial_activation_token();
+                        }
+
+                        window_context.drain_pending_activation_opens()
+                    },
                     None => Vec::new(),
                 };
 
                 for pending in pending {
                     self.spawn_pending_activation_open(pending, None);
                 }
+            },
+            #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+            (EventType::ActivationOpenPoll, Some(window_id)) => {
+                self.handle_serial_activation_open_poll(*window_id);
             },
             (EventType::ConfigReload(path), _) => {
                 // Clear config logs from message bar for all terminals.
@@ -834,6 +890,8 @@ impl ApplicationHandler<Event> for Processor {
             ) => (),
             #[cfg(not(any(target_os = "macos", windows)))]
             (EventType::ActivationOpenTimeout, None) => (),
+            #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+            (EventType::ActivationOpenPoll, None) => (),
             // Shutdown all windows.
             #[cfg(unix)]
             (EventType::Shutdown, _) => event_loop.exit(),
@@ -1086,6 +1144,8 @@ pub enum EventType {
     IpcTab(IpcTabRequest, Arc<UnixStream>),
     #[cfg(not(any(target_os = "macos", windows)))]
     ActivationOpenTimeout,
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    ActivationOpenPoll,
     BlinkCursor,
     BlinkCursorTimeout,
     SearchNext,
@@ -1108,6 +1168,8 @@ pub struct PendingActivationOpen {
 #[derive(Debug)]
 pub enum ActivationOpenRequest {
     Winit(AsyncRequestSerial),
+    #[cfg(feature = "wayland")]
+    WaylandSerial,
 }
 
 /// Tab IPC request dispatched to the event loop.
@@ -2170,6 +2232,40 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         {
             let working_directory = foreground_process_path(self.master_fd, self.shell_pid).ok();
 
+            #[cfg(feature = "wayland")]
+            if self.display.window.request_serial_activation_token() {
+                self.pending_activation_opens.push(PendingActivationOpen {
+                    request: ActivationOpenRequest::WaylandSerial,
+                    command,
+                    working_directory,
+                });
+
+                let window_id = self.display.window.id();
+                let poll_timer_id = TimerId::new(Topic::ActivationOpenPoll, window_id);
+                if !self.scheduler.scheduled(poll_timer_id) {
+                    let event = Event::new(EventType::ActivationOpenPoll, window_id);
+                    self.scheduler.schedule(
+                        event,
+                        SERIAL_ACTIVATION_OPEN_POLL,
+                        false,
+                        poll_timer_id,
+                    );
+                }
+
+                let timeout_timer_id = TimerId::new(Topic::ActivationOpen, window_id);
+                if !self.scheduler.scheduled(timeout_timer_id) {
+                    let event = Event::new(EventType::ActivationOpenTimeout, window_id);
+                    self.scheduler.schedule(
+                        event,
+                        ACTIVATION_OPEN_TIMEOUT,
+                        false,
+                        timeout_timer_id,
+                    );
+                }
+
+                return;
+            }
+
             match self.display.window.request_activation_token() {
                 Ok(serial) => {
                     self.pending_activation_opens.push(PendingActivationOpen {
@@ -2682,6 +2778,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::Frame => (),
                 #[cfg(not(any(target_os = "macos", windows)))]
                 EventType::ActivationOpenTimeout => (),
+                #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+                EventType::ActivationOpenPoll => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {

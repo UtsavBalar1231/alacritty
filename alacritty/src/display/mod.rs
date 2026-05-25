@@ -69,6 +69,8 @@ pub mod color;
 pub mod content;
 pub mod cursor;
 pub mod hint;
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+mod wayland_activation;
 pub mod window;
 
 mod bell;

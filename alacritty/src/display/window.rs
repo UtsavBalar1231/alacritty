@@ -35,6 +35,8 @@ use winit::event_loop::AsyncRequestSerial;
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{
     CursorIcon, Fullscreen, ImePurpose, Theme, UserAttentionType, Window as WinitWindow,
@@ -47,6 +49,8 @@ use crate::cli::WindowOptions;
 use crate::config::UiConfig;
 use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::display::SizeInfo;
+#[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+use crate::display::wayland_activation::WaylandActivation;
 
 /// Window icon for `_NET_WM_ICON` property.
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
@@ -121,6 +125,8 @@ pub struct Window {
     title: String,
 
     is_x11: bool,
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    wayland_activation: Option<WaylandActivation>,
     current_mouse_cursor: CursorIcon,
     mouse_visible: bool,
     ime_inhibitor: ImeInhibitor,
@@ -204,6 +210,28 @@ impl Window {
         let scale_factor = window.scale_factor();
         log::info!("Window scale factor: {scale_factor}");
         let is_x11 = matches!(window.window_handle().unwrap().as_raw(), RawWindowHandle::Xlib(_));
+        #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+        let wayland_activation = match (
+            window.display_handle().map(|handle| handle.as_raw()),
+            window.window_handle().map(|handle| handle.as_raw()),
+        ) {
+            (Ok(RawDisplayHandle::Wayland(display)), Ok(RawWindowHandle::Wayland(surface))) => {
+                match unsafe { WaylandActivation::new(display.display, surface.surface) } {
+                    Ok(activation) => {
+                        log::debug!("Initialized serial-backed Wayland activation helper");
+                        Some(activation)
+                    },
+                    Err(err) => {
+                        log::debug!("Unable to initialize Wayland activation helper: {err}");
+                        None
+                    },
+                }
+            },
+            _ => {
+                log::debug!("Serial-backed Wayland activation helper is unavailable");
+                None
+            },
+        };
 
         Ok(Self {
             hold: options.terminal_options.hold,
@@ -215,6 +243,8 @@ impl Window {
             scale_factor,
             window,
             is_x11,
+            #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+            wayland_activation,
             ime_inhibitor: Default::default(),
         })
     }
@@ -231,6 +261,46 @@ impl Window {
         &self,
     ) -> std::result::Result<AsyncRequestSerial, winit::error::NotSupportedError> {
         self.window.request_activation_token()
+    }
+
+    /// Request an activation token backed by a recent Wayland input serial.
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    pub fn request_serial_activation_token(&mut self) -> bool {
+        let Some(activation) = self.wayland_activation.as_mut() else {
+            return false;
+        };
+        match activation.request_token() {
+            Ok(started) => started,
+            Err(err) => {
+                log::debug!("Unable to request serial-backed Wayland activation token: {err}");
+                false
+            },
+        }
+    }
+
+    /// Poll a pending Wayland serial-backed activation token request.
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    pub fn poll_serial_activation_token(&mut self) -> Option<String> {
+        let activation = self.wayland_activation.as_mut()?;
+        match activation.poll_token() {
+            Ok(token) => token,
+            Err(err) => {
+                log::debug!("Unable to poll serial-backed Wayland activation token: {err}");
+                None
+            },
+        }
+    }
+
+    /// Cancel a pending serial-backed activation token request.
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    pub fn cancel_serial_activation_token(&mut self) {
+        let Some(activation) = self.wayland_activation.as_mut() else {
+            return;
+        };
+
+        if let Err(err) = activation.cancel_token_request() {
+            log::debug!("Unable to cancel serial-backed Wayland activation token: {err}");
+        }
     }
 
     #[inline]

@@ -29,6 +29,8 @@ pub enum Topic {
     BlinkCursor,
     BlinkTimeout,
     ActivationOpen,
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    ActivationOpenPoll,
     Frame,
 }
 

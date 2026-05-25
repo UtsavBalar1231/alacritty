@@ -55,6 +55,11 @@ clap_complete = "4.2.3"
 [target.'cfg(not(windows))'.dependencies]
 xdg = "3.0.0"
 
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+wayland-backend = { version = "0.3.11", features = ["client_system"], optional = true }
+wayland-client = { version = "0.31.11", optional = true }
+wayland-protocols = { version = "0.32.9", features = ["client", "staging"], optional = true }
+
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 png = { version = "0.17.5", default-features = false, optional = true }
 
@@ -101,5 +106,8 @@ wayland = [
     "winit/wayland",
     "winit/wayland-dlopen",
     "winit/wayland-csd-adwaita-crossfont",
+    "dep:wayland-backend",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
 ]
 nightly = []

@@ -640,6 +640,22 @@ impl WindowContext {
         Some(self.pending_activation_opens.remove(index))
     }
 
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    pub fn take_pending_serial_activation_open(&mut self) -> Option<PendingActivationOpen> {
+        let index = self
+            .pending_activation_opens
+            .iter()
+            .position(|pending| matches!(pending.request, ActivationOpenRequest::WaylandSerial))?;
+        Some(self.pending_activation_opens.remove(index))
+    }
+
+    #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
+    pub fn has_pending_serial_activation_open(&self) -> bool {
+        self.pending_activation_opens
+            .iter()
+            .any(|pending| matches!(pending.request, ActivationOpenRequest::WaylandSerial))
+    }
+
     #[cfg(not(any(target_os = "macos", windows)))]
     pub fn has_pending_activation_opens(&self) -> bool {
         !self.pending_activation_opens.is_empty()
