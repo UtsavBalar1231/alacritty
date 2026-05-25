@@ -102,7 +102,9 @@ impl OpenLauncher {
     fn command(&self, target: &OpenTarget<'_>) -> ResolvedOpen {
         match self {
             Self::Default => platform_default_launcher(target),
-            Self::Command(program) => command_with_target(program, target),
+            Self::Command(program) => {
+                command_with_target(OpenActionMode::External, program, target)
+            },
         }
     }
 }
@@ -158,7 +160,17 @@ pub struct OpenAction {
     protocols: Option<Vec<String>>,
     url: Option<UrlPattern>,
     extensions: Option<Vec<String>>,
+    mode: OpenActionMode,
     command: Program,
+}
+
+/// Destination used for matching URL open actions.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenActionMode {
+    #[default]
+    External,
+    Tab,
+    Window,
 }
 
 impl Serialize for OpenAction {
@@ -166,7 +178,7 @@ impl Serialize for OpenAction {
     where
         S: Serializer,
     {
-        let mut fields = 1;
+        let mut fields = 2;
         fields += usize::from(self.protocols.is_some());
         fields += usize::from(self.url.is_some());
         fields += usize::from(self.extensions.is_some());
@@ -181,6 +193,7 @@ impl Serialize for OpenAction {
         if let Some(extensions) = &self.extensions {
             state.serialize_field("extension", extensions)?;
         }
+        state.serialize_field("mode", &self.mode)?;
         state.serialize_field("command", &self.command)?;
         state.end()
     }
@@ -214,7 +227,7 @@ impl OpenAction {
     }
 
     fn command(&self, target: &OpenTarget<'_>) -> ResolvedOpen {
-        command_with_target(&self.command, target)
+        command_with_target(self.mode, &self.command, target)
     }
 }
 
@@ -232,6 +245,8 @@ impl<'de> Deserialize<'de> for OpenAction {
             url: Option<UrlPattern>,
             #[serde(default, alias = "ext")]
             extension: Option<StringList>,
+            #[serde(default)]
+            mode: OpenActionMode,
             command: Program,
         }
 
@@ -265,13 +280,14 @@ impl<'de> Deserialize<'de> for OpenAction {
             ));
         }
 
-        Ok(Self { protocols, url: value.url, extensions, command: value.command })
+        Ok(Self { protocols, url: value.url, extensions, mode: value.mode, command: value.command })
     }
 }
 
 /// Resolved command for opening a target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedOpen {
+    pub mode: OpenActionMode,
     pub program: String,
     pub args: Vec<String>,
 }
@@ -335,25 +351,38 @@ fn path_part(text: &str) -> &str {
     }
 }
 
-fn command_with_target(program: &Program, target: &OpenTarget<'_>) -> ResolvedOpen {
+fn command_with_target(
+    mode: OpenActionMode,
+    program: &Program,
+    target: &OpenTarget<'_>,
+) -> ResolvedOpen {
     let mut args = program.args().to_vec();
     args.push(target.text.into());
-    ResolvedOpen { program: program.program().into(), args }
+    ResolvedOpen { mode, program: program.program().into(), args }
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn platform_default_launcher(target: &OpenTarget<'_>) -> ResolvedOpen {
-    ResolvedOpen { program: "xdg-open".into(), args: vec![target.text.into()] }
+    ResolvedOpen {
+        mode: OpenActionMode::External,
+        program: "xdg-open".into(),
+        args: vec![target.text.into()],
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn platform_default_launcher(target: &OpenTarget<'_>) -> ResolvedOpen {
-    ResolvedOpen { program: "open".into(), args: vec![target.text.into()] }
+    ResolvedOpen {
+        mode: OpenActionMode::External,
+        program: "open".into(),
+        args: vec![target.text.into()],
+    }
 }
 
 #[cfg(windows)]
 fn platform_default_launcher(target: &OpenTarget<'_>) -> ResolvedOpen {
     ResolvedOpen {
+        mode: OpenActionMode::External,
         program: "cmd".into(),
         args: vec!["/c".into(), "start".into(), "".into(), target.text.into()],
     }
@@ -447,18 +476,21 @@ mod tests {
 
         #[cfg(not(any(target_os = "macos", windows)))]
         assert_eq!(resolved, ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "xdg-open".into(),
             args: vec!["https://example.org".into()],
         });
 
         #[cfg(target_os = "macos")]
         assert_eq!(resolved, ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "open".into(),
             args: vec!["https://example.org".into()],
         });
 
         #[cfg(windows)]
         assert_eq!(resolved, ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "cmd".into(),
             args: vec!["/c".into(), "start".into(), "".into(), "https://example.org".into()],
         });
@@ -470,16 +502,48 @@ mod tests {
             r#"
             [[actions]]
             protocol = ["https"]
+            mode = "Tab"
             command = "first"
 
             [[actions]]
             protocol = ["https"]
+            mode = "Window"
             command = "second"
             "#,
         )
         .unwrap();
 
-        assert_eq!(config.resolve("https://example.org").unwrap().program, "first");
+        let resolved = config.resolve("https://example.org").unwrap();
+        assert_eq!(resolved.program, "first");
+        assert_eq!(resolved.mode, OpenActionMode::Tab);
+    }
+
+    #[test]
+    fn open_action_modes_are_resolved() {
+        for (mode, expected) in [
+            (None, OpenActionMode::External),
+            (Some("External"), OpenActionMode::External),
+            (Some("Tab"), OpenActionMode::Tab),
+            (Some("Window"), OpenActionMode::Window),
+        ] {
+            let mode = mode.map(|mode| format!("mode = \"{mode}\"\n")).unwrap_or_default();
+            let config = toml::from_str::<OpenConfig>(&format!(
+                r#"
+                [[actions]]
+                protocol = "https"
+                {mode}
+                command = {{ program = "browser", args = ["--new-tab"] }}
+                "#
+            ))
+            .unwrap();
+
+            let resolved = config.resolve("https://example.org").unwrap();
+            assert_eq!(resolved.mode, expected);
+            assert_eq!(resolved.args, vec![
+                "--new-tab".to_owned(),
+                "https://example.org".to_owned()
+            ]);
+        }
     }
 
     #[test]
@@ -526,6 +590,7 @@ mod tests {
         assert_eq!(
             config.resolve("https://github.com/alacritty/alacritty").unwrap(),
             ResolvedOpen {
+                mode: OpenActionMode::External,
                 program: "firefox".into(),
                 args: vec!["--new-tab".into(), "https://github.com/alacritty/alacritty".into()],
             }
@@ -563,6 +628,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.resolve("https://example.org/a;rm -rf /").unwrap(), ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "browser".into(),
             args: vec!["--new-tab".into(), "https://example.org/a;rm -rf /".into()],
         });
@@ -596,6 +662,7 @@ mod tests {
 
         assert_eq!(config.resolve("https://example.org").unwrap().program, "browser");
         assert_eq!(config.resolve("file:/tmp/readme").unwrap(), ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "custom-open".into(),
             args: vec!["--reuse-window".into(), "file:/tmp/readme".into()],
         });
@@ -624,6 +691,7 @@ mod tests {
             protocols: Some(vec!["https".into()]),
             url: Some(UrlPattern("example".into())),
             extensions: Some(vec!["pdf".into()]),
+            mode: OpenActionMode::Tab,
             command: Program::Just("browser".into()),
         };
 
@@ -632,8 +700,12 @@ mod tests {
 
         assert!(table.contains_key("protocol"));
         assert!(table.contains_key("extension"));
+        assert_eq!(table.get("mode").and_then(toml::Value::as_str), Some("Tab"));
         assert!(!table.contains_key("protocols"));
         assert!(!table.contains_key("extensions"));
+
+        let decoded = OpenAction::deserialize(serialized).unwrap();
+        assert_eq!(decoded.mode, OpenActionMode::Tab);
     }
 
     #[test]
@@ -710,6 +782,18 @@ mod tests {
             )
             .is_err()
         );
+
+        assert!(
+            toml::from_str::<OpenConfig>(
+                r#"
+            [[actions]]
+            protocol = "https"
+            mode = "Split"
+            command = "browser"
+            "#,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -727,6 +811,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.open.resolve("https://example.org").unwrap(), ResolvedOpen {
+            mode: OpenActionMode::External,
             program: "browser".into(),
             args: vec!["--new-tab".into(), "https://example.org".into()],
         });

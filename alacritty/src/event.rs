@@ -50,7 +50,10 @@ use crate::cli::{
 };
 use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
+use crate::config::open::{OpenActionMode, ResolvedOpen};
 use crate::config::ui_config::{HintAction, HintInternalAction};
+#[cfg(target_os = "macos")]
+use crate::config::window::Decorations;
 use crate::config::{self, UiConfig};
 #[cfg(not(windows))]
 use crate::daemon::foreground_process_path;
@@ -1752,7 +1755,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                     warn!("Unable to open invalid URL target: {text:?}");
                     return;
                 };
-                self.spawn_daemon(&command.program, &command.args);
+                match command.mode {
+                    OpenActionMode::External => self.open_external(command),
+                    OpenActionMode::Tab => self.open_in_new_tab(command),
+                    OpenActionMode::Window => self.open_in_new_window(command),
+                }
             },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
@@ -2005,6 +2012,51 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
+    fn open_external(&mut self, command: ResolvedOpen) {
+        self.spawn_daemon(&command.program, &command.args);
+    }
+
+    fn open_command_options(&self, command: ResolvedOpen) -> WindowOptions {
+        let mut options = WindowOptions::with_command(command.program, command.args);
+        #[cfg(not(windows))]
+        {
+            options.terminal_options.working_directory =
+                foreground_process_path(self.master_fd, self.shell_pid).ok();
+        }
+
+        options
+    }
+
+    fn open_in_new_tab(&mut self, command: ResolvedOpen) {
+        let options = self.open_command_options(command);
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut options = options;
+            if self.config.window.decorations != Decorations::None {
+                options.window_tabbing_id = Some(self.window().tabbing_id());
+            } else {
+                warn!(
+                    "Unable to open URL in native macOS tab without window decorations; opening a \
+                     new window instead",
+                );
+            }
+
+            let _ = self.event_proxy.send_event(Event::new(EventType::CreateWindow(options), None));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let event = Event::new(EventType::CreateTab(options), self.display.window.id());
+            let _ = self.event_proxy.send_event(event);
+        }
+    }
+
+    fn open_in_new_window(&mut self, command: ResolvedOpen) {
+        let options = self.open_command_options(command);
+        let _ = self.event_proxy.send_event(Event::new(EventType::CreateWindow(options), None));
+    }
+
     fn update_search(&mut self) {
         let regex = match self.search_state.regex() {
             Some(regex) => regex,

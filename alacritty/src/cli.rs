@@ -169,6 +169,15 @@ pub struct TerminalOptions {
 }
 
 impl TerminalOptions {
+    /// Create terminal options with a command override.
+    pub fn with_command(program: String, args: Vec<String>) -> Self {
+        let mut command = Vec::with_capacity(args.len() + 1);
+        command.push(program);
+        command.extend(args);
+
+        Self { command, ..Default::default() }
+    }
+
     /// Shell override passed through the CLI.
     pub fn command(&self) -> Option<Program> {
         let (program, args) = self.command.split_first()?;
@@ -332,6 +341,14 @@ pub struct WindowOptions {
 }
 
 impl WindowOptions {
+    /// Create window options with a terminal command override.
+    pub fn with_command(program: String, args: Vec<String>) -> Self {
+        Self {
+            terminal_options: TerminalOptions::with_command(program, args),
+            ..Default::default()
+        }
+    }
+
     /// Get the parsed set of CLI config overrides.
     pub fn config_overrides(&self) -> ParsedOptions {
         ParsedOptions::from_options(&self.option)
@@ -588,6 +605,22 @@ mod tests {
         Options::default().override_config(&mut config);
 
         assert!(config.window.dynamic_title);
+    }
+
+    #[test]
+    fn terminal_options_with_command_roundtrips() {
+        let options = TerminalOptions::with_command("program".into(), vec![
+            "--flag".into(),
+            "https://example.org".into(),
+        ]);
+
+        assert_eq!(
+            options.command(),
+            Some(Program::WithArgs {
+                program: "program".into(),
+                args: vec!["--flag".into(), "https://example.org".into()],
+            })
+        );
     }
 
     #[test]

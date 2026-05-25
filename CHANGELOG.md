@@ -20,6 +20,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - IPC commands for creating, listing, selecting, closing, and moving tabs
 - Tab title templates, activity indicators, overflow markers, and move-left/right actions
 - Configurable URL opening actions and hover previews for plain text URLs
+- Open actions can launch matching URLs in a new Alacritty tab or window
 
 ### Changed
 

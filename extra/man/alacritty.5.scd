@@ -796,7 +796,7 @@ matches, _launcher_ is used.
 
 	Default: _"Default"_
 
-*actions* = [{ *<protocol>*, *<url>*, *<extension>*, *<command>* },]
+*actions* = [{ *<protocol>*, *<url>*, *<extension>*, *<mode>*, *<command>* },]
 
 	Array with URL-specific open actions.
 
@@ -822,6 +822,25 @@ matches, _launcher_ is used.
 		Command to execute for matching URLs. The URL or hyperlink target is always
 		attached as the last argument.
 
+	*mode* = _"External"_ | _"Tab"_ | _"Window"_
+
+		Controls where the command is launched.
+
+		*External*
+			Run _command_ as an external process. This preserves the behavior of
+			open actions without an explicit _mode_.
+
+		*Tab*
+			Open a new Alacritty tab running _command_ with the URL or hyperlink
+			target attached as the last argument. On macOS this opens a native tab
+			when window decorations allow it, otherwise it opens a regular window.
+
+		*Window*
+			Open a new Alacritty window running _command_ with the URL or hyperlink
+			target attached as the last argument.
+
+		Default: _"External"_
+
 	Default: _[]_
 
 	Example:
@@ -831,10 +850,17 @@ launcher = _"Default"_++
 [[open.actions]]++
 protocol = [_"http"_, _"https"_]++
 url = _"github\\.com"_++
+mode = _"External"_++
 command = { program = _"firefox"_, args = [_"--new-tab"_] }++
 ++
 [[open.actions]]++
+url = _"docs\\.rs"_++
+mode = _"Tab"_++
+command = _"w3m"_++
+++
+[[open.actions]]++
 extension = _"pdf"_++
+mode = _"External"_++
 command = _"zathura"_
 
 # HINTS
