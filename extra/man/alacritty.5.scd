@@ -230,6 +230,21 @@ This section documents the *[window]* table of the configuration file.
 
 		Default: _"Left"_
 
+	*style* = _"Plain"_ | _"Separator"_
+
+		Tab bar style.
+
+		Default: _"Separator"_
+
+	*separator* = _"<string>"_
+
+		Separator used between visible tabs when _style_ is _"Separator"_. Leading
+		spaces are treated as trailing padding for the previous tab, trailing spaces
+		are treated as leading padding for the next tab, and the remaining text is
+		rendered as the separator.
+
+		Default: _" ┇"_
+
 	*max_width* = _<integer>_
 
 		Maximum width of each tab in terminal cells.
@@ -381,8 +396,10 @@ macOS:     { family = _"Menlo"_,     style = _"Regular"_ }
 *builtin_box_drawing* = _true_ | _false_
 
 	When _true_, Alacritty will use a custom built-in font for box drawing
-	characters (Unicode points _U+2500_ - _U+259F_), legacy computing symbols
-	(_U+1FB00_ - _U+1FB3B_), and powerline symbols (_U+E0B0_ - _U+E0B3_).
+	characters (Unicode points _U+2500_ - _U+259F_), Braille patterns
+	(_U+2800_ - _U+28FF_), legacy computing symbols (_U+1FB00_ - _U+1FB3B_
+	and _U+1FB82_ - _U+1FB8B_), and powerline symbols (_U+E0B0_ - _U+E0B7_).
+	These built-in glyphs take priority over _symbol_map_ entries.
 
 	Default: _true_
 
