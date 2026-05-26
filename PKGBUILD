@@ -3,7 +3,7 @@
 pkgname=alacritty-git
 _pkgname=alacritty
 _srcname=alacritty-src
-pkgver=0.18.0.dev.r2497.g404e1fb
+pkgver=0.18.0.dev.r2501.g62d2aec
 pkgrel=1
 pkgdesc="A cross-platform, GPU-accelerated terminal emulator with local patches"
 arch=('x86_64')
