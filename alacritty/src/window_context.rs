@@ -1177,6 +1177,8 @@ impl WindowContext {
             visibility,
             position: tab_config.position.into(),
             alignment: tab_config.alignment.into(),
+            style: tab_config.style.into(),
+            separator: &tab_config.separator,
             close_button_visibility: tab_config.close_button.into(),
             hovered_tab: self.tab_bar.hovered_tab,
             show_indices: tab_config.show_indices(),

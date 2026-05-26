@@ -30,6 +30,19 @@ pub enum TabBarCloseButtonVisibility {
     Never,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarStyle {
+    Plain,
+    Separator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabBarSeparator {
+    pub left_padding: String,
+    pub core: String,
+    pub right_padding: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabBarEntry {
     pub id: TabId,
@@ -67,7 +80,15 @@ pub struct TabBarSegment {
     pub tab_id: Option<TabId>,
     pub start_column: usize,
     pub end_column: usize,
-    pub is_close_button: bool,
+    pub kind: TabBarSegmentKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarSegmentKind {
+    Tab,
+    CloseButton,
+    OverflowIndicator,
+    Separator,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +113,8 @@ pub struct TabBarLayoutInput<'a> {
     pub visibility: TabBarVisibility,
     pub position: TabBarPosition,
     pub alignment: TabBarAlignment,
+    pub style: TabBarStyle,
+    pub separator: &'a str,
     pub close_button_visibility: TabBarCloseButtonVisibility,
     pub hovered_tab: Option<TabId>,
     pub show_indices: bool,
@@ -139,6 +162,7 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
             input.min_width,
             input.close_button_visibility,
             input.hovered_tab,
+            input.style == TabBarStyle::Plain,
         ));
     }
 
@@ -146,7 +170,8 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
     let mut hit_regions = Vec::new();
     let mut close_regions = Vec::new();
 
-    let content_width = prepared.iter().map(|(_, text, _)| width(text)).sum::<usize>();
+    let separator = parse_separator(input.separator);
+    let content_width = range_width(&prepared, 0, prepared.len(), input.style, &separator, 0);
     if content_width <= input.columns {
         let start_column = match input.alignment {
             TabBarAlignment::Left => 0,
@@ -157,13 +182,16 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
             &prepared,
             start_column,
             input.columns,
+            input.style,
+            &separator,
             &mut segments,
             &mut hit_regions,
             &mut close_regions,
         );
     } else {
         let active = prepared.iter().position(|(tab, ..)| tab.active).unwrap_or(0);
-        let (first, last) = visible_overflow_range(&prepared, active, input.columns);
+        let (first, last) =
+            visible_overflow_range(&prepared, active, input.columns, input.style, &separator);
         let show_indicators = input.columns >= 3;
         let hidden_left = show_indicators && first > 0;
         let hidden_right = show_indicators && last < prepared.len();
@@ -177,6 +205,8 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
             &prepared[first..last],
             column,
             input.columns.saturating_sub(usize::from(hidden_right)),
+            input.style,
+            &separator,
             &mut segments,
             &mut hit_regions,
             &mut close_regions,
@@ -241,27 +271,60 @@ impl From<crate::config::window::TabBarCloseButton> for TabBarCloseButtonVisibil
     }
 }
 
+impl From<crate::config::window::TabBarStyle> for TabBarStyle {
+    fn from(style: crate::config::window::TabBarStyle) -> Self {
+        match style {
+            crate::config::window::TabBarStyle::Plain => Self::Plain,
+            crate::config::window::TabBarStyle::Separator => Self::Separator,
+        }
+    }
+}
+
 fn width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
 type PreparedTab<'a> = (&'a TabBarEntry, String, Option<usize>);
 
+fn parse_separator(separator: &str) -> TabBarSeparator {
+    let core_start = separator
+        .char_indices()
+        .find_map(|(index, ch)| (ch != ' ').then_some(index))
+        .unwrap_or(separator.len());
+    let core_end = separator
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| (ch != ' ').then_some(index + ch.len_utf8()))
+        .unwrap_or(core_start);
+
+    TabBarSeparator {
+        left_padding: separator[..core_start].into(),
+        core: separator[core_start..core_end].into(),
+        right_padding: separator[core_end..].into(),
+    }
+}
+
 fn visible_overflow_range(
     tabs: &[PreparedTab<'_>],
     active: usize,
     columns: usize,
+    style: TabBarStyle,
+    separator: &TabBarSeparator,
 ) -> (usize, usize) {
     let mut first = active;
     let mut last = active + 1;
 
     loop {
         let mut changed = false;
-        if last < tabs.len() && overflow_range_width(tabs, first, last + 1, columns) <= columns {
+        if last < tabs.len()
+            && overflow_range_width(tabs, first, last + 1, columns, style, separator) <= columns
+        {
             last += 1;
             changed = true;
         }
-        if first > 0 && overflow_range_width(tabs, first - 1, last, columns) <= columns {
+        if first > 0
+            && overflow_range_width(tabs, first - 1, last, columns, style, separator) <= columns
+        {
             first -= 1;
             changed = true;
         }
@@ -279,29 +342,62 @@ fn overflow_range_width(
     first: usize,
     last: usize,
     columns: usize,
+    style: TabBarStyle,
+    separator: &TabBarSeparator,
 ) -> usize {
     let indicator_width =
         if columns >= 3 { usize::from(first > 0) + usize::from(last < tabs.len()) } else { 0 };
-    tabs[first..last].iter().map(|(_, text, _)| width(text)).sum::<usize>() + indicator_width
+    range_width(tabs, first, last, style, separator, indicator_width)
+}
+
+fn range_width(
+    tabs: &[PreparedTab<'_>],
+    first: usize,
+    last: usize,
+    style: TabBarStyle,
+    separator: &TabBarSeparator,
+    extra_width: usize,
+) -> usize {
+    let tabs_width = tabs[first..last].iter().map(|(_, text, _)| width(text)).sum::<usize>();
+    let separator_width = match style {
+        TabBarStyle::Plain => 0,
+        TabBarStyle::Separator => last.saturating_sub(first + 1) * separator.width(),
+    };
+
+    tabs_width + separator_width + extra_width
 }
 
 fn push_tab_segments(
     tabs: &[PreparedTab<'_>],
     start_column: usize,
     end_column_limit: usize,
+    style: TabBarStyle,
+    separator: &TabBarSeparator,
     segments: &mut Vec<TabBarSegment>,
     hit_regions: &mut Vec<(TabId, usize, usize)>,
     close_regions: &mut Vec<(TabId, usize, usize)>,
 ) {
     let mut column = start_column;
-    for (tab, text, close_start) in tabs {
+    for (index, (tab, text, close_start)) in tabs.iter().enumerate() {
+        let prefix = if index > 0 && style == TabBarStyle::Separator {
+            separator.right_padding.as_str()
+        } else {
+            ""
+        };
+        let suffix = if index + 1 < tabs.len() && style == TabBarStyle::Separator {
+            separator.left_padding.as_str()
+        } else {
+            ""
+        };
+        let prefixed_width = width(prefix);
+        let text = format!("{prefix}{text}{suffix}");
         let start = column;
         let available = end_column_limit.saturating_sub(start);
         if available == 0 {
             break;
         }
 
-        let text = clip_text(text, available);
+        let text = clip_text(&text, available);
         let end = start + text.width();
         if end == start {
             break;
@@ -314,9 +410,10 @@ fn push_tab_segments(
             tab_id: Some(tab.id),
             start_column: start,
             end_column: end,
-            is_close_button: false,
+            kind: TabBarSegmentKind::Tab,
         });
-        if let Some(close_start) = close_start.map(|close_start| start + close_start)
+        if let Some(close_start) =
+            close_start.map(|close_start| start + prefixed_width + close_start)
             && close_start < end
         {
             close_regions.push((tab.id, close_start, close_start + 1));
@@ -326,7 +423,7 @@ fn push_tab_segments(
                 tab_id: Some(tab.id),
                 start_column: close_start,
                 end_column: close_start + 1,
-                is_close_button: true,
+                kind: TabBarSegmentKind::CloseButton,
             });
         }
 
@@ -334,6 +431,39 @@ fn push_tab_segments(
         if column >= end_column_limit {
             break;
         }
+
+        if index + 1 < tabs.len() && style == TabBarStyle::Separator && !separator.core.is_empty() {
+            let start = column;
+            let available = end_column_limit.saturating_sub(start);
+            if available == 0 {
+                break;
+            }
+
+            let text = clip_text(&separator.core, available);
+            let end = start + text.width();
+            if end == start {
+                break;
+            }
+
+            segments.push(TabBarSegment {
+                text,
+                active: false,
+                tab_id: None,
+                start_column: start,
+                end_column: end,
+                kind: TabBarSegmentKind::Separator,
+            });
+            column = end;
+            if column >= end_column_limit {
+                break;
+            }
+        }
+    }
+}
+
+impl TabBarSeparator {
+    fn width(&self) -> usize {
+        width(&self.left_padding) + width(&self.core) + width(&self.right_padding)
     }
 }
 
@@ -344,7 +474,7 @@ fn push_overflow_indicator(text: &str, column: usize, segments: &mut Vec<TabBarS
         tab_id: None,
         start_column: column,
         end_column: column + 1,
-        is_close_button: false,
+        kind: TabBarSegmentKind::OverflowIndicator,
     });
 }
 
@@ -355,6 +485,7 @@ fn prepare_tab_segment<'a>(
     min_width: usize,
     close_button_visibility: TabBarCloseButtonVisibility,
     hovered_tab: Option<TabId>,
+    padded: bool,
 ) -> (&'a TabBarEntry, String, Option<usize>) {
     let max_width = max_width.unwrap_or(usize::MAX);
     let min_width = min_width.min(max_width);
@@ -367,12 +498,15 @@ fn prepare_tab_segment<'a>(
             || matches!(close_button_visibility, TabBarCloseButtonVisibility::Hover)
                 && hovered_tab == Some(tab.id);
 
+    let padding_width = if padded { 2 } else { 0 };
     let close_width = if reserve_close_button { 2 } else { 0 };
-    let label_width = max_width.saturating_sub(2 + close_width);
+    let label_width = max_width.saturating_sub(padding_width + close_width);
     let label = clip_label(label, label_width);
     let mut text = String::new();
 
-    push_space(&mut text, max_width);
+    if padded {
+        push_space(&mut text, max_width);
+    }
     text.push_str(&clip_text(&label, max_width.saturating_sub(width(&text))));
 
     let mut close_start = None;
@@ -384,7 +518,9 @@ fn prepare_tab_segment<'a>(
         }
     }
 
-    push_space(&mut text, max_width);
+    if padded {
+        push_space(&mut text, max_width);
+    }
     while width(&text) < min_width {
         text.push(' ');
     }
@@ -457,6 +593,8 @@ mod tests {
             visibility: TabBarVisibility::Auto,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -474,6 +612,8 @@ mod tests {
             visibility: TabBarVisibility::Auto,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -495,6 +635,8 @@ mod tests {
                 visibility: TabBarVisibility::Always,
                 position: TabBarPosition::Bottom,
                 alignment: TabBarAlignment::Left,
+                style: TabBarStyle::Plain,
+                separator: " ┇",
                 close_button_visibility: TabBarCloseButtonVisibility::Never,
                 hovered_tab: None,
                 show_indices: false,
@@ -513,6 +655,8 @@ mod tests {
                 visibility: TabBarVisibility::Never,
                 position: TabBarPosition::Bottom,
                 alignment: TabBarAlignment::Left,
+                style: TabBarStyle::Plain,
+                separator: " ┇",
                 close_button_visibility: TabBarCloseButtonVisibility::Never,
                 hovered_tab: None,
                 show_indices: false,
@@ -534,6 +678,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -555,6 +701,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -576,6 +724,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -598,6 +748,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Always,
             hovered_tab: None,
             show_indices: false,
@@ -606,7 +758,9 @@ mod tests {
         });
 
         assert!(layout.segments.iter().all(|segment| segment.end_column <= 1));
-        assert!(!layout.segments.iter().any(|segment| segment.is_close_button));
+        assert!(
+            !layout.segments.iter().any(|segment| segment.kind == TabBarSegmentKind::CloseButton)
+        );
     }
 
     #[test]
@@ -620,6 +774,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -640,6 +796,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Always,
             hovered_tab: None,
             show_indices: false,
@@ -656,17 +814,23 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: Some(TabId::new(1)),
             show_indices: false,
             max_width: None,
             min_width: 0,
         });
-        assert!(hovered.segments.iter().any(|segment| segment.is_close_button));
+        assert!(
+            hovered.segments.iter().any(|segment| segment.kind == TabBarSegmentKind::CloseButton)
+        );
         assert_eq!(hovered.close_regions.len(), 1);
         assert_eq!(layout.hit_regions.len(), 2);
         assert_eq!(layout.close_regions.len(), 2);
-        assert!(layout.segments.iter().any(|segment| segment.is_close_button));
+        assert!(
+            layout.segments.iter().any(|segment| segment.kind == TabBarSegmentKind::CloseButton)
+        );
     }
 
     #[test]
@@ -680,6 +844,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: None,
             show_indices: false,
@@ -695,6 +861,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: Some(TabId::new(1)),
             show_indices: false,
@@ -716,6 +884,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -731,6 +901,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -746,6 +918,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Right,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -774,6 +948,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -805,6 +981,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -820,5 +998,191 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(overflow_columns, vec![0, 11]);
+    }
+
+    #[test]
+    fn separator_uses_configured_padding_semantics() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("one", true), ("two", false)]),
+            columns: 20,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Separator,
+            separator: " <|> ",
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        let texts = layout.segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(texts, vec!["one ", "<|>", " two"]);
+        assert_eq!(layout.hit_regions, vec![(TabId::new(0), 0, 4), (TabId::new(1), 7, 11)]);
+        assert!(layout.close_regions.is_empty());
+    }
+
+    #[test]
+    fn separator_core_is_not_clickable() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("one", true), ("two", false)]),
+            columns: 20,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Separator,
+            separator: " <|> ",
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        let separator = layout
+            .segments
+            .iter()
+            .find(|segment| segment.kind == TabBarSegmentKind::Separator)
+            .unwrap();
+        assert_eq!((separator.start_column, separator.end_column), (4, 7));
+        assert!(!layout.hit_regions.iter().any(|(_, start, end)| *start < 7 && *end > 4));
+        assert!(layout.close_regions.is_empty());
+    }
+
+    #[test]
+    fn separator_is_only_between_visible_tabs() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("one", true), ("two", false), ("three", false)]),
+            columns: 30,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Separator,
+            separator: " ┇",
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        assert_eq!(layout.segments.last().unwrap().kind, TabBarSegmentKind::Tab);
+        assert_eq!(
+            layout
+                .segments
+                .iter()
+                .filter(|segment| segment.kind == TabBarSegmentKind::Separator)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn separator_does_not_touch_overflow_indicators() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[
+                ("one", false),
+                ("two", false),
+                ("three", true),
+                ("four", false),
+                ("five", false),
+            ]),
+            columns: 10,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Separator,
+            separator: " ┇",
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: Some(3),
+            min_width: 0,
+        });
+
+        for (index, segment) in layout.segments.iter().enumerate() {
+            if segment.kind == TabBarSegmentKind::Separator {
+                assert_ne!(layout.segments[index - 1].kind, TabBarSegmentKind::OverflowIndicator);
+                assert_ne!(layout.segments[index + 1].kind, TabBarSegmentKind::OverflowIndicator);
+            }
+        }
+    }
+
+    #[test]
+    fn alignment_includes_separator_width() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("a", true), ("b", false)]),
+            columns: 11,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Separator,
+            separator: " | ",
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        assert_eq!(layout.segments[0].start_column, 3);
+        assert_eq!(layout.segments.last().unwrap().end_column, 8);
+    }
+
+    #[test]
+    fn hover_close_button_does_not_shift_separator_layout() {
+        let entries = tabs(&[("one", true), ("two", false)]);
+        let unhovered = layout_tab_bar(TabBarLayoutInput {
+            tabs: &entries,
+            columns: 40,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Separator,
+            separator: " ┇",
+            close_button_visibility: TabBarCloseButtonVisibility::Hover,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+        let hovered = layout_tab_bar(TabBarLayoutInput {
+            tabs: &entries,
+            columns: 40,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Separator,
+            separator: " ┇",
+            close_button_visibility: TabBarCloseButtonVisibility::Hover,
+            hovered_tab: Some(TabId::new(1)),
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        assert_eq!(unhovered.hit_regions, hovered.hit_regions);
     }
 }

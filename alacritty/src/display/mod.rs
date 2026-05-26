@@ -61,8 +61,8 @@ use crate::string::{ShortenDirection, StrShortener};
 #[allow(unused_imports)]
 pub use tab_bar::{
     TabBarAlignment, TabBarCloseButtonVisibility, TabBarEntry, TabBarLayout, TabBarLayoutInput,
-    TabBarPoint, TabBarPosition, TabBarRect, TabBarSegment, TabBarState, TabBarVisibility,
-    layout_tab_bar,
+    TabBarPoint, TabBarPosition, TabBarRect, TabBarSegment, TabBarState, TabBarStyle,
+    TabBarVisibility, layout_tab_bar,
 };
 
 pub mod color;
@@ -942,6 +942,8 @@ impl Display {
                 visibility: tab_config.visibility.into(),
                 position: tab_config.position.into(),
                 alignment: tab_config.alignment.into(),
+                style: tab_config.style.into(),
+                separator: &tab_config.separator,
                 close_button_visibility: tab_config.close_button.into(),
                 hovered_tab: tab_bar.hovered_tab,
                 show_indices: tab_config.show_indices(),
@@ -1024,7 +1026,9 @@ impl Display {
         };
 
         let draw_tab_bar = |display: &mut Self| {
-            for segment in tab_bar_segments.iter().filter(|segment| !segment.is_close_button) {
+            for segment in tab_bar_segments.iter().filter(|segment| {
+                segment.kind != crate::display::tab_bar::TabBarSegmentKind::CloseButton
+            }) {
                 let (fg, bg) = if segment.active {
                     (
                         config.colors.tab_bar_active_foreground(),

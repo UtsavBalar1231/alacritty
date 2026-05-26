@@ -331,6 +331,12 @@ pub struct TabBarConfig {
     /// Tab alignment.
     pub alignment: TabBarAlignment,
 
+    /// Tab bar style.
+    pub style: TabBarStyle,
+
+    /// Text inserted between tabs for separator style.
+    pub separator: String,
+
     /// Maximum tab width.
     pub max_width: usize,
 
@@ -385,6 +391,13 @@ pub enum TabBarAlignment {
 }
 
 #[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabBarStyle {
+    Plain,
+    #[default]
+    Separator,
+}
+
+#[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TabBarCloseButton {
     Never,
     #[default]
@@ -398,6 +411,8 @@ impl Default for TabBarConfig {
             visibility: Default::default(),
             position: Default::default(),
             alignment: Default::default(),
+            style: Default::default(),
+            separator: String::from(" ┇"),
             max_width: 24,
             min_width: 6,
             show_index: true,
@@ -442,6 +457,8 @@ mod tests {
             visibility: TabBarVisibility::Auto,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Separator,
+            separator: String::from(" ┇"),
             max_width: 24,
             min_width: 6,
             show_index: true,
@@ -463,6 +480,8 @@ mod tests {
             visibility = "Always"
             position = "Bottom"
             alignment = "Center"
+            style = "Plain"
+            separator = " | "
             max_width = 32
             min_width = 8
             show_index = false
@@ -481,6 +500,8 @@ mod tests {
             visibility: TabBarVisibility::Always,
             position: TabBarPosition::Bottom,
             alignment: TabBarAlignment::Center,
+            style: TabBarStyle::Plain,
+            separator: String::from(" | "),
             max_width: 32,
             min_width: 8,
             show_index: false,
@@ -511,5 +532,10 @@ mod tests {
     #[test]
     fn invalid_tab_bar_position() {
         assert!(toml::from_str::<TabBarPosition>("\"Top\"").is_err());
+    }
+
+    #[test]
+    fn invalid_tab_bar_style() {
+        assert!(toml::from_str::<TabBarStyle>("\"Fancy\"").is_err());
     }
 }
