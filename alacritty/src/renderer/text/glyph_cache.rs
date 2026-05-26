@@ -251,34 +251,35 @@ impl GlyphCache {
             return *glyph;
         };
 
-        // Rasterize the glyph using an explicitly mapped symbol font, the built-in font for
-        // special characters, or the user's font for everything else.
-        let rasterized = self
-            .symbol_font_index(glyph_key.character)
-            .map(|index| {
-                let symbol_font = &self.symbol_map[index];
-                let symbol_key = GlyphKey { font_key: symbol_font.key, ..glyph_key };
-                let family = symbol_font.family.clone();
-
-                let rasterized = self.rasterizer.get_glyph(symbol_key);
-                if rasterized.is_ok() {
-                    debug!("Loaded glyph {:?} from symbol font {:?}", glyph_key.character, family,);
-                }
-                rasterized
+        // Rasterize the glyph using the built-in font for special characters, an explicitly mapped
+        // symbol font, or the user's font for everything else.
+        let builtin = self
+            .builtin_box_drawing
+            .then(|| {
+                builtin_font::builtin_glyph(
+                    glyph_key.character,
+                    &self.metrics,
+                    &self.font_offset,
+                    &self.glyph_offset,
+                )
             })
-            .unwrap_or_else(|| {
-                self.builtin_box_drawing
-                    .then(|| {
-                        builtin_font::builtin_glyph(
-                            glyph_key.character,
-                            &self.metrics,
-                            &self.font_offset,
-                            &self.glyph_offset,
-                        )
-                    })
-                    .flatten()
-                    .map_or_else(|| self.rasterizer.get_glyph(glyph_key), Ok)
-            });
+            .flatten();
+
+        let rasterized = if let Some(rasterized) = builtin {
+            Ok(rasterized)
+        } else if let Some(index) = self.symbol_font_index(glyph_key.character) {
+            let symbol_font = &self.symbol_map[index];
+            let symbol_key = GlyphKey { font_key: symbol_font.key, ..glyph_key };
+            let family = symbol_font.family.clone();
+
+            let rasterized = self.rasterizer.get_glyph(symbol_key);
+            if rasterized.is_ok() {
+                debug!("Loaded glyph {:?} from symbol font {:?}", glyph_key.character, family,);
+            }
+            rasterized
+        } else {
+            self.rasterizer.get_glyph(glyph_key)
+        };
 
         let glyph = match rasterized {
             Ok(rasterized) => self.load_glyph(loader, rasterized),

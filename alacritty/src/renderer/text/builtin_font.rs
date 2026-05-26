@@ -18,6 +18,10 @@ const POWERLINE_TRIANGLE_LTR: char = '\u{e0b0}';
 const POWERLINE_ARROW_LTR: char = '\u{e0b1}';
 const POWERLINE_TRIANGLE_RTL: char = '\u{e0b2}';
 const POWERLINE_ARROW_RTL: char = '\u{e0b3}';
+const POWERLINE_ROUND_RTL: char = '\u{e0b4}';
+const POWERLINE_ROUND_ARROW_RTL: char = '\u{e0b5}';
+const POWERLINE_ROUND_LTR: char = '\u{e0b6}';
+const POWERLINE_ROUND_ARROW_LTR: char = '\u{e0b7}';
 
 /// Returns the rasterized glyph if the character is part of the built-in font.
 pub fn builtin_glyph(
@@ -31,8 +35,10 @@ pub fn builtin_glyph(
         '\u{2500}'..='\u{259f}' | '\u{1fb00}'..='\u{1fb3b}' | '\u{1fb82}'..='\u{1fb8b}' => {
             box_drawing(character, metrics, offset)
         },
-        // Powerline symbols: '','','',''
-        POWERLINE_TRIANGLE_LTR..=POWERLINE_ARROW_RTL => {
+        // Braille patterns.
+        '\u{2800}'..='\u{28ff}' => braille_drawing(character, metrics, offset),
+        // Powerline symbols.
+        POWERLINE_TRIANGLE_LTR..=POWERLINE_ROUND_ARROW_LTR => {
             powerline_drawing(character, metrics, offset)?
         },
         _ => return None,
@@ -44,6 +50,52 @@ pub fn builtin_glyph(
     glyph.top -= glyph_offset.y as i32;
 
     Some(glyph)
+}
+
+fn braille_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> RasterizedGlyph {
+    let height = (metrics.line_height as i32 + offset.y as i32).max(1) as usize;
+    let width = (metrics.average_advance as i32 + offset.x as i32).max(1) as usize;
+    let mut canvas = Canvas::new(width, height);
+
+    let bits = character as u32 - 0x2800;
+    let dot_width = (width as f32 / 4.).round().max(1.);
+    let dot_height = (height as f32 / 8.).round().max(1.);
+    let x_step = width as f32 / 2.;
+    let y_step = height as f32 / 4.;
+
+    for dot in 0..8 {
+        if bits & (1 << dot) == 0 {
+            continue;
+        }
+
+        let (column, row) = match dot {
+            0 => (0, 0),
+            1 => (0, 1),
+            2 => (0, 2),
+            3 => (0, 3),
+            4 => (1, 0),
+            5 => (1, 1),
+            6 => (1, 2),
+            7 => (1, 3),
+            _ => unreachable!(),
+        };
+
+        let x = column as f32 * x_step + (x_step - dot_width) / 2.;
+        let y = row as f32 * y_step + (y_step - dot_height) / 2.;
+        canvas.draw_rect(x.round(), y.round(), dot_width, dot_height, COLOR_FILL);
+    }
+
+    let top = height as i32 + metrics.descent as i32;
+    let buffer = BitmapBuffer::Rgb(canvas.into_raw());
+    RasterizedGlyph {
+        character,
+        top,
+        left: 0,
+        height: height as i32,
+        width: width as i32,
+        buffer,
+        advance: (width as i32, height as i32),
+    }
 }
 
 fn box_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> RasterizedGlyph {
@@ -601,12 +653,33 @@ fn powerline_drawing(
     metrics: &Metrics,
     offset: &Delta<i8>,
 ) -> Option<RasterizedGlyph> {
-    let height = (metrics.line_height as i32 + offset.y as i32) as usize;
-    let width = (metrics.average_advance as i32 + offset.x as i32) as usize;
+    let height = (metrics.line_height as i32 + offset.y as i32).max(1) as usize;
+    let width = (metrics.average_advance as i32 + offset.x as i32).max(1) as usize;
     let extra_thickness = calculate_stroke_size(width) as i32 - 1;
 
-    let mut canvas = Canvas::new(width, height);
+    let canvas = Canvas::new(width, height);
 
+    if matches!(
+        character,
+        POWERLINE_ROUND_RTL
+            | POWERLINE_ROUND_ARROW_RTL
+            | POWERLINE_ROUND_LTR
+            | POWERLINE_ROUND_ARROW_LTR
+    ) {
+        round_powerline_drawing(character, metrics, canvas)
+    } else {
+        angled_powerline_drawing(character, metrics, width, height, extra_thickness, canvas)
+    }
+}
+
+fn angled_powerline_drawing(
+    character: char,
+    metrics: &Metrics,
+    width: usize,
+    height: usize,
+    extra_thickness: i32,
+    mut canvas: Canvas,
+) -> Option<RasterizedGlyph> {
     let slope = 1;
     let top_y = 1;
     let bottom_y = height as i32 - top_y - 1;
@@ -654,6 +727,54 @@ fn powerline_drawing(
 
     if character == POWERLINE_TRIANGLE_RTL || character == POWERLINE_ARROW_RTL {
         canvas.flip_horizontal();
+    }
+
+    let top = height as i32 + metrics.descent as i32;
+    let buffer = BitmapBuffer::Rgb(canvas.into_raw());
+    Some(RasterizedGlyph {
+        character,
+        top,
+        left: 0,
+        height: height as i32,
+        width: width as i32,
+        buffer,
+        advance: (width as i32, height as i32),
+    })
+}
+
+fn round_powerline_drawing(
+    character: char,
+    metrics: &Metrics,
+    mut canvas: Canvas,
+) -> Option<RasterizedGlyph> {
+    let width = canvas.width;
+    let height = canvas.height;
+    let filled = character == POWERLINE_ROUND_RTL || character == POWERLINE_ROUND_LTR;
+    let left = character == POWERLINE_ROUND_LTR || character == POWERLINE_ROUND_ARROW_LTR;
+    let center_x = if left { width as f32 } else { 0. };
+    let center_y = height as f32 / 2.;
+    let radius = height as f32 / 2.;
+    let stroke_size = calculate_stroke_size(width).max(1) as f32;
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 + 0.5 - center_x;
+            let dy = y as f32 + 0.5 - center_y;
+            let distance = dx.hypot(dy);
+            let alpha = if filled {
+                (radius + 0.5 - distance).clamp(0., 1.)
+            } else {
+                (stroke_size - (radius - distance).abs()).clamp(0., 1.)
+            };
+
+            if alpha > 0. {
+                canvas.put_pixel(
+                    x as f32,
+                    y as f32,
+                    Pixel::gray((COLOR_FILL._r as f32 * alpha) as u8),
+                );
+            }
+        }
     }
 
     let top = height as i32 + metrics.descent as i32;
@@ -1005,8 +1126,10 @@ mod tests {
         let offset = Default::default();
         let glyph_offset = Default::default();
 
-        // Test coverage of box drawing characters.
-        for character in ('\u{2500}'..='\u{259f}').chain('\u{1fb00}'..='\u{1fb3b}') {
+        for character in ('\u{2500}'..='\u{259f}')
+            .chain('\u{1fb00}'..='\u{1fb3b}')
+            .chain('\u{1fb82}'..='\u{1fb8b}')
+        {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_some());
         }
 
@@ -1020,12 +1143,25 @@ mod tests {
         let offset = Default::default();
         let glyph_offset = Default::default();
 
-        // Test coverage of box drawing characters.
-        for character in '\u{e0b0}'..='\u{e0b3}' {
+        for character in '\u{e0b0}'..='\u{e0b7}' {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_some());
         }
 
-        for character in ('\u{e0a0}'..'\u{e0b0}').chain('\u{e0b4}'..'\u{e0c0}') {
+        for character in ('\u{e0a0}'..'\u{e0b0}').chain('\u{e0b8}'..'\u{e0c0}') {
+            assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_none());
+        }
+    }
+
+    #[test]
+    fn builtin_braille_glyphs_coverage() {
+        let offset = Default::default();
+        let glyph_offset = Default::default();
+
+        for character in '\u{2800}'..='\u{28ff}' {
+            assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_some());
+        }
+
+        for character in ('\u{27f0}'..'\u{2800}').chain('\u{2900}'..'\u{2910}') {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_none());
         }
     }
