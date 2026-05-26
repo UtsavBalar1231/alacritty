@@ -468,12 +468,14 @@ impl Display {
             config.window.dynamic_padding && config.window.dimensions().is_none(),
         );
         #[cfg(not(target_os = "macos"))]
-        if matches!(
-            config.window.tab_bar.visibility,
-            crate::config::window::TabBarVisibility::Always
-        ) {
-            size_info.reserve_lines(1);
-        }
+        size_info.reserve_lines(config.window.tab_bar.reserved_rows(
+            matches!(
+                config.window.tab_bar.visibility,
+                crate::config::window::TabBarVisibility::Always
+            ),
+            window.scale_factor as f32,
+            cell_height,
+        ));
 
         info!("Cell size: {cell_width} x {cell_height}");
         info!("Padding: {} x {}", size_info.padding_x(), size_info.padding_y());
@@ -721,7 +723,12 @@ impl Display {
         let search_active = search_state.history_index.is_some();
         let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
         let search_lines = usize::from(search_active);
-        new_size.reserve_lines(message_bar_lines + search_lines + usize::from(tab_bar_visible));
+        let tab_bar_rows = config.window.tab_bar.reserved_rows(
+            tab_bar_visible,
+            self.window.scale_factor as f32,
+            cell_height,
+        );
+        new_size.reserve_lines(message_bar_lines + search_lines + tab_bar_rows);
 
         // Update resize increments.
         if config.window.resize_increments {
@@ -944,6 +951,12 @@ impl Display {
                 alignment: tab_config.alignment.into(),
                 style: tab_config.style.into(),
                 separator: &tab_config.separator,
+                margin_width: tab_config
+                    .margin_width_columns(self.window.scale_factor as f32, size_info.cell_width()),
+                margin_inner_rows: tab_config
+                    .margin_inner_rows(self.window.scale_factor as f32, size_info.cell_height()),
+                margin_outer_rows: tab_config
+                    .margin_outer_rows(self.window.scale_factor as f32, size_info.cell_height()),
                 close_button_visibility: tab_config.close_button.into(),
                 hovered_tab: tab_bar.hovered_tab,
                 show_indices: tab_config.show_indices(),
@@ -998,25 +1011,38 @@ impl Display {
             tab_bar.close_regions = layout.close_regions;
 
             if let Some(background) = layout.full_row_background.filter(|_| layout.visible) {
+                let x = size_info
+                    .cell_width()
+                    .mul_add(background.start_column as f32, size_info.padding_x());
                 let y =
                     size_info.cell_height().mul_add(background.row as f32, size_info.padding_y());
+                let width = (background.end_column - background.start_column) as f32
+                    * size_info.cell_width();
                 let background_rect = RenderRect::new(
-                    0.,
+                    x,
                     y,
-                    size_info.width(),
+                    width,
                     size_info.cell_height(),
                     config.colors.tab_bar_inactive_background(),
                     1.,
                 );
 
                 let height = size_info.cell_height() as i32;
-                let width = size_info.width() as i32;
-                self.damage_tracker
-                    .frame()
-                    .add_viewport_rect(&size_info, 0, y as i32, width, height);
-                self.damage_tracker
-                    .next_frame()
-                    .add_viewport_rect(&size_info, 0, y as i32, width, height);
+                let damage_width = width as i32;
+                self.damage_tracker.frame().add_viewport_rect(
+                    &size_info,
+                    x as i32,
+                    y as i32,
+                    damage_width,
+                    height,
+                );
+                self.damage_tracker.next_frame().add_viewport_rect(
+                    &size_info,
+                    x as i32,
+                    y as i32,
+                    damage_width,
+                    height,
+                );
                 rects.push(background_rect);
             }
 
@@ -1754,7 +1780,13 @@ fn window_size(
     let grid_height = cell_height * dimensions.lines.max(MIN_SCREEN_LINES) as f32;
 
     let width = (padding.0).mul_add(2., grid_width).floor();
-    let height = (padding.1).mul_add(2., grid_height).floor();
+    let tab_bar_height = config.window.tab_bar.reserved_rows(
+        matches!(config.window.tab_bar.visibility, crate::config::window::TabBarVisibility::Always),
+        scale_factor,
+        cell_height,
+    ) as f32
+        * cell_height;
+    let height = (padding.1).mul_add(2., grid_height + tab_bar_height).floor();
 
     PhysicalSize::new(width as u32, height as u32)
 }

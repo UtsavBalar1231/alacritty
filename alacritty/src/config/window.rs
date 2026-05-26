@@ -320,7 +320,7 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
-#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct TabBarConfig {
     /// Tab bar visibility.
     pub visibility: TabBarVisibility,
@@ -336,6 +336,12 @@ pub struct TabBarConfig {
 
     /// Text inserted between tabs for separator style.
     pub separator: String,
+
+    /// Horizontal tab bar margin in logical pixels.
+    pub margin_width: f32,
+
+    /// Vertical tab bar margins in logical pixels.
+    pub margin_height: TabBarMarginHeight,
 
     /// Maximum tab width.
     pub max_width: usize,
@@ -366,6 +372,21 @@ pub struct TabBarConfig {
 
     /// Show activity and bell indicators.
     pub show_activity_indicator: bool,
+}
+
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq)]
+pub struct TabBarMarginHeight {
+    /// Margin between the tab bar and the window edge.
+    pub outer: f32,
+
+    /// Margin between the tab bar and terminal content.
+    pub inner: f32,
+}
+
+impl Default for TabBarMarginHeight {
+    fn default() -> Self {
+        Self { outer: 0., inner: 0. }
+    }
 }
 
 #[derive(ConfigDeserialize, Serialize, Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -413,6 +434,8 @@ impl Default for TabBarConfig {
             alignment: Default::default(),
             style: Default::default(),
             separator: String::from(" ┇"),
+            margin_width: 0.,
+            margin_height: Default::default(),
             max_width: 24,
             min_width: 6,
             show_index: true,
@@ -434,6 +457,35 @@ impl TabBarConfig {
             && self.active_title_template.is_none()
             && self.inactive_title_template.is_none()
     }
+
+    pub fn margin_width_columns(&self, scale_factor: f32, cell_width: f32) -> usize {
+        margin_cells(self.margin_width, scale_factor, cell_width)
+    }
+
+    pub fn margin_inner_rows(&self, scale_factor: f32, cell_height: f32) -> usize {
+        margin_cells(self.margin_height.inner, scale_factor, cell_height)
+    }
+
+    pub fn margin_outer_rows(&self, scale_factor: f32, cell_height: f32) -> usize {
+        margin_cells(self.margin_height.outer, scale_factor, cell_height)
+    }
+
+    pub fn reserved_rows(&self, visible: bool, scale_factor: f32, cell_height: f32) -> usize {
+        if visible {
+            1 + self.margin_inner_rows(scale_factor, cell_height)
+                + self.margin_outer_rows(scale_factor, cell_height)
+        } else {
+            0
+        }
+    }
+}
+
+fn margin_cells(margin: f32, scale_factor: f32, cell_size: f32) -> usize {
+    if margin <= 0. || cell_size <= 0. {
+        return 0;
+    }
+
+    ((margin * scale_factor) / cell_size).ceil() as usize
 }
 
 impl From<WindowLevel> for WinitWindowLevel {
@@ -459,6 +511,8 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Separator,
             separator: String::from(" ┇"),
+            margin_width: 0.,
+            margin_height: TabBarMarginHeight::default(),
             max_width: 24,
             min_width: 6,
             show_index: true,
@@ -482,6 +536,8 @@ mod tests {
             alignment = "Center"
             style = "Plain"
             separator = " | "
+            margin_width = 8.0
+            margin_height = { outer = 8.0, inner = 0.0 }
             max_width = 32
             min_width = 8
             show_index = false
@@ -502,6 +558,8 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Plain,
             separator: String::from(" | "),
+            margin_width: 8.,
+            margin_height: TabBarMarginHeight { outer: 8., inner: 0. },
             max_width: 32,
             min_width: 8,
             show_index: false,

@@ -96,6 +96,8 @@ pub struct TabBarLayout {
     pub visible: bool,
     pub position: TabBarPosition,
     pub reserved_rows: usize,
+    pub block_start_row: Option<usize>,
+    pub block_end_row: Option<usize>,
     pub row: Option<usize>,
     pub full_row_background: Option<TabBarRect>,
     pub segments: Vec<TabBarSegment>,
@@ -115,6 +117,9 @@ pub struct TabBarLayoutInput<'a> {
     pub alignment: TabBarAlignment,
     pub style: TabBarStyle,
     pub separator: &'a str,
+    pub margin_width: usize,
+    pub margin_inner_rows: usize,
+    pub margin_outer_rows: usize,
     pub close_button_visibility: TabBarCloseButtonVisibility,
     pub hovered_tab: Option<TabId>,
     pub show_indices: bool,
@@ -129,21 +134,51 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
         TabBarVisibility::Auto => input.tabs.len() >= 2,
     };
 
-    let reserved_rows = usize::from(visible);
-    let row = visible.then_some(match input.position {
+    let reserved_rows =
+        if visible { input.margin_inner_rows + 1 + input.margin_outer_rows } else { 0 };
+    let block_start_row = visible.then_some(match input.position {
         TabBarPosition::Bottom => input.screen_lines + input.search_lines + input.message_lines,
     });
+    let block_end_row = block_start_row.map(|row| row + reserved_rows);
+    let row = block_start_row.map(|row| match input.position {
+        TabBarPosition::Bottom => row + input.margin_inner_rows,
+    });
+
+    let content_start = input.margin_width.min(input.columns);
+    let content_end = input.columns.saturating_sub(input.margin_width).max(content_start);
+    let content_columns = content_end.saturating_sub(content_start);
 
     if !visible || input.columns == 0 || input.tabs.is_empty() {
         return TabBarLayout {
             visible,
             position: input.position,
             reserved_rows,
+            block_start_row,
+            block_end_row,
             row,
             full_row_background: row.map(|row| TabBarRect {
                 row,
-                start_column: 0,
-                end_column: input.columns,
+                start_column: content_start,
+                end_column: content_end,
+            }),
+            segments: Vec::new(),
+            hit_regions: Vec::new(),
+            close_regions: Vec::new(),
+        };
+    }
+
+    if content_columns == 0 {
+        return TabBarLayout {
+            visible,
+            position: input.position,
+            reserved_rows,
+            block_start_row,
+            block_end_row,
+            row,
+            full_row_background: row.map(|row| TabBarRect {
+                row,
+                start_column: content_start,
+                end_column: content_end,
             }),
             segments: Vec::new(),
             hit_regions: Vec::new(),
@@ -172,16 +207,18 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
 
     let separator = parse_separator(input.separator);
     let content_width = range_width(&prepared, 0, prepared.len(), input.style, &separator, 0);
-    if content_width <= input.columns {
+    if content_width <= content_columns {
         let start_column = match input.alignment {
-            TabBarAlignment::Left => 0,
-            TabBarAlignment::Center => input.columns.saturating_sub(content_width) / 2,
-            TabBarAlignment::Right => input.columns.saturating_sub(content_width),
+            TabBarAlignment::Left => content_start,
+            TabBarAlignment::Center => {
+                content_start + content_columns.saturating_sub(content_width) / 2
+            },
+            TabBarAlignment::Right => content_end.saturating_sub(content_width),
         };
         push_tab_segments(
             &prepared,
             start_column,
-            input.columns,
+            content_end,
             input.style,
             &separator,
             &mut segments,
@@ -191,12 +228,12 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
     } else {
         let active = prepared.iter().position(|(tab, ..)| tab.active).unwrap_or(0);
         let (first, last) =
-            visible_overflow_range(&prepared, active, input.columns, input.style, &separator);
-        let show_indicators = input.columns >= 3;
+            visible_overflow_range(&prepared, active, content_columns, input.style, &separator);
+        let show_indicators = content_columns >= 3;
         let hidden_left = show_indicators && first > 0;
         let hidden_right = show_indicators && last < prepared.len();
 
-        let mut column = 0;
+        let mut column = content_start;
         if hidden_left {
             push_overflow_indicator("…", column, &mut segments);
             column += 1;
@@ -204,7 +241,7 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
         push_tab_segments(
             &prepared[first..last],
             column,
-            input.columns.saturating_sub(usize::from(hidden_right)),
+            content_end.saturating_sub(usize::from(hidden_right)),
             input.style,
             &separator,
             &mut segments,
@@ -212,8 +249,8 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
             &mut close_regions,
         );
         column = segments.iter().map(|segment| segment.end_column).max().unwrap_or(column);
-        if hidden_right && column < input.columns {
-            push_overflow_indicator("…", input.columns - 1, &mut segments);
+        if hidden_right && column < content_end {
+            push_overflow_indicator("…", content_end - 1, &mut segments);
         }
     }
 
@@ -221,11 +258,13 @@ pub fn layout_tab_bar(input: TabBarLayoutInput<'_>) -> TabBarLayout {
         visible,
         position: input.position,
         reserved_rows,
+        block_start_row,
+        block_end_row,
         row,
         full_row_background: row.map(|row| TabBarRect {
             row,
-            start_column: 0,
-            end_column: input.columns,
+            start_column: content_start,
+            end_column: content_end,
         }),
         segments,
         hit_regions,
@@ -595,6 +634,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -614,6 +656,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -637,6 +682,9 @@ mod tests {
                 alignment: TabBarAlignment::Left,
                 style: TabBarStyle::Plain,
                 separator: " ┇",
+                margin_width: 0,
+                margin_inner_rows: 0,
+                margin_outer_rows: 0,
                 close_button_visibility: TabBarCloseButtonVisibility::Never,
                 hovered_tab: None,
                 show_indices: false,
@@ -657,6 +705,9 @@ mod tests {
                 alignment: TabBarAlignment::Left,
                 style: TabBarStyle::Plain,
                 separator: " ┇",
+                margin_width: 0,
+                margin_inner_rows: 0,
+                margin_outer_rows: 0,
                 close_button_visibility: TabBarCloseButtonVisibility::Never,
                 hovered_tab: None,
                 show_indices: false,
@@ -680,6 +731,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -688,6 +742,64 @@ mod tests {
         });
         assert_eq!(layout.row, Some(27));
         assert_eq!(layout.full_row_background.unwrap().row, 27);
+    }
+
+    #[test]
+    fn margins_adjust_reserved_rows_and_tab_row() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("one", true), ("two", false)]),
+            columns: 20,
+            screen_lines: 10,
+            search_lines: 1,
+            message_lines: 2,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 2,
+            margin_outer_rows: 3,
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        assert_eq!(layout.reserved_rows, 6);
+        assert_eq!(layout.block_start_row, Some(13));
+        assert_eq!(layout.row, Some(15));
+        assert_eq!(layout.block_end_row, Some(19));
+    }
+
+    #[test]
+    fn margin_width_limits_tab_bar_content_area() {
+        let layout = layout_tab_bar(TabBarLayoutInput {
+            tabs: &tabs(&[("one", true), ("two", false)]),
+            columns: 20,
+            screen_lines: 10,
+            search_lines: 0,
+            message_lines: 0,
+            visibility: TabBarVisibility::Always,
+            position: TabBarPosition::Bottom,
+            alignment: TabBarAlignment::Left,
+            style: TabBarStyle::Plain,
+            separator: " ┇",
+            margin_width: 2,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
+            close_button_visibility: TabBarCloseButtonVisibility::Never,
+            hovered_tab: None,
+            show_indices: false,
+            max_width: None,
+            min_width: 0,
+        });
+
+        let background = layout.full_row_background.unwrap();
+        assert_eq!(background.start_column, 2);
+        assert_eq!(background.end_column, 18);
+        assert_eq!(layout.hit_regions[0], (TabId::new(0), 2, 7));
     }
 
     #[test]
@@ -703,6 +815,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -726,6 +841,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -750,6 +868,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Always,
             hovered_tab: None,
             show_indices: false,
@@ -776,6 +897,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -798,6 +922,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Always,
             hovered_tab: None,
             show_indices: false,
@@ -816,6 +943,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: Some(TabId::new(1)),
             show_indices: false,
@@ -846,6 +976,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: None,
             show_indices: false,
@@ -863,6 +996,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: Some(TabId::new(1)),
             show_indices: false,
@@ -886,6 +1022,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -903,6 +1042,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -920,6 +1062,9 @@ mod tests {
             alignment: TabBarAlignment::Right,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -950,6 +1095,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -983,6 +1131,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Plain,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1013,6 +1164,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Separator,
             separator: " <|> ",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1039,6 +1193,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Separator,
             separator: " <|> ",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1069,6 +1226,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Separator,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1106,6 +1266,9 @@ mod tests {
             alignment: TabBarAlignment::Left,
             style: TabBarStyle::Separator,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1134,6 +1297,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Separator,
             separator: " | ",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Never,
             hovered_tab: None,
             show_indices: false,
@@ -1159,6 +1325,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Separator,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: None,
             show_indices: false,
@@ -1176,6 +1345,9 @@ mod tests {
             alignment: TabBarAlignment::Center,
             style: TabBarStyle::Separator,
             separator: " ┇",
+            margin_width: 0,
+            margin_inner_rows: 0,
+            margin_outer_rows: 0,
             close_button_visibility: TabBarCloseButtonVisibility::Hover,
             hovered_tab: Some(TabId::new(1)),
             show_indices: false,

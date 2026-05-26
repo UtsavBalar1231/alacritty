@@ -245,6 +245,22 @@ This section documents the *[window]* table of the configuration file.
 
 		Default: _" ┇"_
 
+	*margin_width* = _<float>_
+
+		Margin to the left and right of the tab bar in logical pixels. The margin is
+		rounded up to full terminal cells.
+
+		Default: _0.0_
+
+	*margin_height* = { outer = _<float>_, inner = _<float>_ }
+
+		Margins above and below the tab bar in logical pixels. For a bottom tab bar,
+		_outer_ is the margin between the tab bar and the window edge, while _inner_
+		is the margin between the tab bar and terminal content. Margins are rounded
+		up to full terminal rows.
+
+		Default: { outer = _0.0_, inner = _0.0_ }
+
 	*max_width* = _<integer>_
 
 		Maximum width of each tab in terminal cells.

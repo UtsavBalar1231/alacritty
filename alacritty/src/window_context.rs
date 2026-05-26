@@ -1179,6 +1179,12 @@ impl WindowContext {
             alignment: tab_config.alignment.into(),
             style: tab_config.style.into(),
             separator: &tab_config.separator,
+            margin_width: tab_config
+                .margin_width_columns(self.display.window.scale_factor as f32, size.cell_width()),
+            margin_inner_rows: tab_config
+                .margin_inner_rows(self.display.window.scale_factor as f32, size.cell_height()),
+            margin_outer_rows: tab_config
+                .margin_outer_rows(self.display.window.scale_factor as f32, size.cell_height()),
             close_button_visibility: tab_config.close_button.into(),
             hovered_tab: self.tab_bar.hovered_tab,
             show_indices: tab_config.show_indices(),
@@ -1195,10 +1201,19 @@ impl WindowContext {
         }
 
         let size = self.display.size_info;
+        let block_start = layout.block_start_row?;
+        let block_end = layout.block_end_row?;
+        let block_start_y =
+            size.cell_height().mul_add(block_start as f32, size.padding_y()) as usize;
+        let block_end_y = size.cell_height().mul_add(block_end as f32, size.padding_y()) as usize;
+        if !(self.mouse.y >= block_start_y && self.mouse.y < block_end_y) {
+            return None;
+        }
+
         let tab_bar_line = layout.row?;
         let tab_bar_y = size.cell_height().mul_add(tab_bar_line as f32, size.padding_y()) as usize;
         if !(self.mouse.y >= tab_bar_y && self.mouse.y < tab_bar_y + size.cell_height() as usize) {
-            return None;
+            return Some(TabBarHit::Background);
         }
 
         if self.mouse.x < size.padding_x() as usize
