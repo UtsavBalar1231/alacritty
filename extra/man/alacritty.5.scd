@@ -413,8 +413,10 @@ macOS:     { family = _"Menlo"_,     style = _"Regular"_ }
 
 	When _true_, Alacritty will use a custom built-in font for box drawing
 	characters (Unicode points _U+2500_ - _U+259F_), Braille patterns
-	(_U+2800_ - _U+28FF_), legacy computing symbols (_U+1FB00_ - _U+1FB3B_
-	and _U+1FB82_ - _U+1FB8B_), and powerline symbols (_U+E0B0_ - _U+E0B7_).
+	(_U+2800_ - _U+28FF_), legacy computing symbols (_U+1FB00_ - _U+1FB3B_,
+	_U+1FB70_ - _U+1FB7B_, _U+1FB82_ - _U+1FB8B_, _U+1FBCE_ - _U+1FBCF_,
+	_U+1FBE4_ - _U+1FBE5_, and _U+1CEA0_ - _U+1CEAF_), and powerline symbols
+	(_U+E0B0_ - _U+E0BF_).
 	These built-in glyphs take priority over _symbol_map_ entries.
 
 	Default: _true_

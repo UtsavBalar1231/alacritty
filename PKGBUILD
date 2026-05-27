@@ -2,8 +2,7 @@
 
 pkgname=alacritty-git
 _pkgname=alacritty
-_srcname=alacritty-src
-pkgver=0.18.0.dev.r2501.g62d2aec
+pkgver=0.18.0.dev.r2506.gf3d2b7d.local
 pkgrel=1
 pkgdesc="A cross-platform, GPU-accelerated terminal emulator with local patches"
 arch=('x86_64')
@@ -32,22 +31,28 @@ checkdepends=('ttf-dejavu')
 optdepends=('ncurses: for the alacritty terminfo database')
 provides=('alacritty')
 conflicts=('alacritty')
-source=("${_srcname}::git+file://${ALACRITTY_SRC:-$PWD}")
-sha256sums=('SKIP')
+source=()
+sha256sums=()
+
+_srcdir="${ALACRITTY_SRC:-${startdir:-$PWD}}"
 
 pkgver() {
-  cd "${_srcname}"
+  cd "${_srcdir}"
 
   local version revision commit
   version="$(awk -F '"' '/^version = / { print $2; exit }' alacritty/Cargo.toml | tr '-' '.')"
   revision="$(git rev-list --count HEAD)"
   commit="$(git rev-parse --short=7 HEAD)"
 
+  if ! git diff --quiet --ignore-submodules -- .; then
+    commit="${commit}.local"
+  fi
+
   printf '%s.r%s.g%s' "${version}" "${revision}" "${commit}"
 }
 
 prepare() {
-  cd "${_srcname}"
+  cd "${_srcdir}"
 
   local host
   host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -55,19 +60,19 @@ prepare() {
 }
 
 build() {
-  cd "${_srcname}"
+  cd "${_srcdir}"
 
   CARGO_INCREMENTAL=0 cargo build --release --locked --offline -p alacritty
 }
 
 check() {
-  cd "${_srcname}"
+  cd "${_srcdir}"
 
   CARGO_INCREMENTAL=0 cargo test --release --locked --offline -p alacritty
 }
 
 package() {
-  cd "${_srcname}"
+  cd "${_srcdir}"
 
   desktop-file-install -m 644 --dir "${pkgdir}/usr/share/applications" \
     extra/linux/Alacritty.desktop

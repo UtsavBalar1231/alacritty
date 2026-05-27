@@ -23,6 +23,10 @@ const POWERLINE_ROUND_ARROW_RTL: char = '\u{e0b5}';
 const POWERLINE_ROUND_LTR: char = '\u{e0b6}';
 const POWERLINE_ROUND_ARROW_LTR: char = '\u{e0b7}';
 
+fn is_powerline_drawing(character: char) -> bool {
+    matches!(character, '\u{e0b0}'..='\u{e0bf}')
+}
+
 /// Returns the rasterized glyph if the character is part of the built-in font.
 pub fn builtin_glyph(
     character: char,
@@ -32,13 +36,17 @@ pub fn builtin_glyph(
 ) -> Option<RasterizedGlyph> {
     let mut glyph = match character {
         // Box drawing characters and block elements.
-        '\u{2500}'..='\u{259f}' | '\u{1fb00}'..='\u{1fb3b}' | '\u{1fb82}'..='\u{1fb8b}' => {
-            box_drawing(character, metrics, offset)
-        },
+        '\u{2500}'..='\u{259f}'
+        | '\u{1fb00}'..='\u{1fb3b}'
+        | '\u{1fb70}'..='\u{1fb7b}'
+        | '\u{1fb82}'..='\u{1fb8b}'
+        | '\u{1fbce}'..='\u{1fbcf}'
+        | '\u{1fbe4}'..='\u{1fbe5}'
+        | '\u{1cea0}'..='\u{1ceaf}' => box_drawing(character, metrics, offset),
         // Braille patterns.
         '\u{2800}'..='\u{28ff}' => braille_drawing(character, metrics, offset),
         // Powerline symbols.
-        POWERLINE_TRIANGLE_LTR..=POWERLINE_ROUND_ARROW_LTR => {
+        character if is_powerline_drawing(character) => {
             powerline_drawing(character, metrics, offset)?
         },
         _ => return None,
@@ -58,31 +66,22 @@ fn braille_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> Ra
     let mut canvas = Canvas::new(width, height);
 
     let bits = character as u32 - 0x2800;
-    let dot_width = (width as f32 / 4.).round().max(1.);
-    let dot_height = (height as f32 / 8.).round().max(1.);
-    let x_step = width as f32 / 2.;
-    let y_step = height as f32 / 4.;
+    let (dot_width, x_starts) = braille_axis_layout::<2>(width);
+    let (dot_height, y_starts) = braille_axis_layout::<4>(height);
 
     for dot in 0..8 {
         if bits & (1 << dot) == 0 {
             continue;
         }
 
-        let (column, row) = match dot {
-            0 => (0, 0),
-            1 => (0, 1),
-            2 => (0, 2),
-            3 => (0, 3),
-            4 => (1, 0),
-            5 => (1, 1),
-            6 => (1, 2),
-            7 => (1, 3),
-            _ => unreachable!(),
-        };
-
-        let x = column as f32 * x_step + (x_step - dot_width) / 2.;
-        let y = row as f32 * y_step + (y_step - dot_height) / 2.;
-        canvas.draw_rect(x.round(), y.round(), dot_width, dot_height, COLOR_FILL);
+        let (column, row) = braille_dot_position(dot);
+        canvas.draw_rect(
+            x_starts[column] as f32,
+            y_starts[row] as f32,
+            dot_width as f32,
+            dot_height as f32,
+            COLOR_FILL,
+        );
     }
 
     let top = height as i32 + metrics.descent as i32;
@@ -96,6 +95,46 @@ fn braille_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> Ra
         buffer,
         advance: (width as i32, height as i32),
     }
+}
+
+fn braille_dot_position(dot: u32) -> (usize, usize) {
+    match dot {
+        0 => (0, 0),
+        1 => (0, 1),
+        2 => (0, 2),
+        3 => (1, 0),
+        4 => (1, 1),
+        5 => (1, 2),
+        6 => (0, 3),
+        7 => (1, 3),
+        _ => unreachable!(),
+    }
+}
+
+fn braille_axis_layout<const DOTS: usize>(size: usize) -> (usize, [usize; DOTS]) {
+    debug_assert!(DOTS > 0);
+
+    let dot_size = cmp::max(size / (DOTS * 2), 1);
+    let mut gaps = [dot_size; DOTS];
+    let mut extra = size.saturating_sub(DOTS * 2 * dot_size);
+    let mut index = 0;
+
+    while extra > 0 {
+        gaps[index] += 1;
+        index = (index + 1) % DOTS;
+        extra -= 1;
+    }
+
+    gaps[0] /= 2;
+
+    let mut starts = [0; DOTS];
+    let mut gap_sum = 0;
+    for index in 0..DOTS {
+        gap_sum += gaps[index];
+        starts[index] = gap_sum + index * dot_size;
+    }
+
+    (dot_size, starts)
 }
 
 fn box_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> RasterizedGlyph {
@@ -632,6 +671,34 @@ fn box_drawing(character: char, metrics: &Metrics, offset: &Delta<i8>) -> Raster
             canvas.draw_rect(0., y_third * 2., w_bottom_left, h_bottom_left, COLOR_FILL);
             canvas.draw_rect(x_center, y_third * 2., w_bottom_right, h_bottom_right, COLOR_FILL);
         },
+        '\u{1fb70}'..='\u{1fb75}' => {
+            let segment = character as usize - 0x1fb6f;
+            canvas.draw_eighth_bar(segment, false);
+        },
+        '\u{1fb76}'..='\u{1fb7b}' => {
+            let segment = character as usize - 0x1fb75;
+            canvas.draw_eighth_bar(segment, true);
+        },
+        '\u{1fbce}' => canvas.draw_int_rect(0, 0, 2 * width / 3, height),
+        '\u{1fbcf}' => canvas.draw_int_rect(0, 0, width / 3, height),
+        '\u{1fbe4}' => canvas.draw_int_rect(width / 4, 0, 3 * width / 4, height / 2),
+        '\u{1fbe5}' => canvas.draw_int_rect(width / 4, height / 2, 3 * width / 4, height),
+        '\u{1cea0}' => canvas.draw_int_rect(width / 2, 3 * height / 4, width, height),
+        '\u{1cea1}' => canvas.draw_int_rect(width / 4, 3 * height / 4, width, height),
+        '\u{1cea2}' => canvas.draw_int_rect(0, 3 * height / 4, 3 * width / 4, height),
+        '\u{1cea3}' => canvas.draw_int_rect(0, 3 * height / 4, width / 2, height),
+        '\u{1cea4}' => canvas.draw_int_rect(0, height / 2, width / 4, height),
+        '\u{1cea5}' => canvas.draw_int_rect(0, height / 4, width / 4, height),
+        '\u{1cea6}' => canvas.draw_int_rect(0, 0, width / 4, 3 * height / 4),
+        '\u{1cea7}' => canvas.draw_int_rect(0, 0, width / 4, height / 2),
+        '\u{1cea8}' => canvas.draw_int_rect(0, 0, width / 2, height / 4),
+        '\u{1cea9}' => canvas.draw_int_rect(0, 0, 3 * width / 4, height / 4),
+        '\u{1ceaa}' => canvas.draw_int_rect(width / 4, 0, width, height / 4),
+        '\u{1ceab}' => canvas.draw_int_rect(width / 2, 0, width, height / 4),
+        '\u{1ceac}' => canvas.draw_int_rect(3 * width / 4, 0, width, height / 2),
+        '\u{1cead}' => canvas.draw_int_rect(3 * width / 4, 0, width, 3 * height / 4),
+        '\u{1ceae}' => canvas.draw_int_rect(3 * width / 4, height / 4, width, height),
+        '\u{1ceaf}' => canvas.draw_int_rect(3 * width / 4, height / 2, width, height),
         _ => unreachable!(),
     }
 
@@ -659,7 +726,9 @@ fn powerline_drawing(
 
     let canvas = Canvas::new(width, height);
 
-    if matches!(
+    if matches!(character, '\u{e0b8}'..='\u{e0bf}') {
+        extra_powerline_drawing(character, metrics, canvas)
+    } else if matches!(
         character,
         POWERLINE_ROUND_RTL
             | POWERLINE_ROUND_ARROW_RTL
@@ -670,6 +739,35 @@ fn powerline_drawing(
     } else {
         angled_powerline_drawing(character, metrics, width, height, extra_thickness, canvas)
     }
+}
+
+fn extra_powerline_drawing(
+    character: char,
+    metrics: &Metrics,
+    mut canvas: Canvas,
+) -> Option<RasterizedGlyph> {
+    match character {
+        '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}' => {
+            canvas.draw_powerline_corner_triangle(character);
+        },
+        '\u{e0b9}' | '\u{e0bf}' => canvas.draw_powerline_cross_line(true),
+        '\u{e0bb}' | '\u{e0bd}' => canvas.draw_powerline_cross_line(false),
+        _ => return None,
+    }
+
+    let top = canvas.height as i32 + metrics.descent as i32;
+    let width = canvas.width as i32;
+    let height = canvas.height as i32;
+    let buffer = BitmapBuffer::Rgb(canvas.into_raw());
+    Some(RasterizedGlyph {
+        character,
+        top,
+        left: 0,
+        height,
+        width,
+        buffer,
+        advance: (width, height),
+    })
 }
 
 fn angled_powerline_drawing(
@@ -1080,6 +1178,68 @@ impl Canvas {
         self.buffer.fill(color);
     }
 
+    fn draw_eighth_bar(&mut self, segment: usize, horizontal: bool) {
+        let (x, y, width, height) = if horizontal {
+            let (start, end) = eighth_segment_range(self.height, segment);
+            (0, start, self.width, end - start)
+        } else {
+            let (start, end) = eighth_segment_range(self.width, segment);
+            (start, 0, end - start, self.height)
+        };
+
+        self.draw_rect(x as f32, y as f32, width as f32, height as f32, COLOR_FILL);
+    }
+
+    fn draw_int_rect(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) {
+        self.draw_rect(
+            x1 as f32,
+            y1 as f32,
+            x2.saturating_sub(x1) as f32,
+            y2.saturating_sub(y1) as f32,
+            COLOR_FILL,
+        );
+    }
+
+    fn draw_powerline_corner_triangle(&mut self, character: char) {
+        let max_x = self.width.saturating_sub(1);
+        let max_y = self.height.saturating_sub(1);
+        let falling_diagonal = matches!(character, '\u{e0b8}' | '\u{e0be}');
+        let top = matches!(character, '\u{e0bc}' | '\u{e0be}');
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let diagonal_y = if falling_diagonal {
+                    if max_x == 0 { 0 } else { x * max_y / max_x }
+                } else if max_x == 0 {
+                    0
+                } else {
+                    (max_x - x) * max_y / max_x
+                };
+
+                let fill = if top { y <= diagonal_y } else { y >= diagonal_y };
+
+                if fill {
+                    self.buffer[y * self.width + x] = COLOR_FILL;
+                }
+            }
+        }
+    }
+
+    fn draw_powerline_cross_line(&mut self, left: bool) {
+        let max_x = self.width.saturating_sub(1) as f32;
+        let max_y = self.height.saturating_sub(1) as f32;
+        let stroke_size = calculate_stroke_size(self.width);
+
+        for offset in 0..stroke_size.min(self.height) {
+            let offset = offset as f32;
+            if left {
+                self.draw_line(0., offset, max_x, max_y - offset);
+            } else {
+                self.draw_line(max_x, offset, 0., max_y - offset);
+            }
+        }
+    }
+
     /// Consumes `Canvas` and returns its underlying storage as raw byte vector.
     fn into_raw(self) -> Vec<u8> {
         // SAFETY This is safe since we use `repr(packed)` on `Pixel` struct for underlying storage
@@ -1092,6 +1252,36 @@ impl Canvas {
             Vec::from_raw_parts(buf, len, capacity)
         }
     }
+}
+
+fn eighth_segment_range(size: usize, segment: usize) -> (usize, usize) {
+    debug_assert!(segment < 8);
+
+    let thickness = cmp::max(size / 8, 1);
+    let block = thickness * 8;
+
+    if block == size {
+        return (thickness * segment, thickness * (segment + 1));
+    }
+
+    if block > size {
+        let start = cmp::min(segment * thickness, size.saturating_sub(thickness));
+        return (start, start + thickness);
+    }
+
+    let mut widths = [thickness; 8];
+    let mut extra = size - block;
+    for index in [3, 4, 2, 5, 6, 1, 7, 0] {
+        if extra == 0 {
+            break;
+        }
+
+        widths[index] += 1;
+        extra -= 1;
+    }
+
+    let start = widths.iter().take(segment).sum();
+    (start, start + widths[segment])
 }
 
 /// Compute line width.
@@ -1128,7 +1318,11 @@ mod tests {
 
         for character in ('\u{2500}'..='\u{259f}')
             .chain('\u{1fb00}'..='\u{1fb3b}')
+            .chain('\u{1fb70}'..='\u{1fb7b}')
             .chain('\u{1fb82}'..='\u{1fb8b}')
+            .chain('\u{1fbce}'..='\u{1fbcf}')
+            .chain('\u{1fbe4}'..='\u{1fbe5}')
+            .chain('\u{1cea0}'..='\u{1ceaf}')
         {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_some());
         }
@@ -1143,12 +1337,24 @@ mod tests {
         let offset = Default::default();
         let glyph_offset = Default::default();
 
-        for character in '\u{e0b0}'..='\u{e0b7}' {
+        for character in '\u{e0b0}'..='\u{e0bf}' {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_some());
         }
 
-        for character in ('\u{e0a0}'..'\u{e0b0}').chain('\u{e0b8}'..'\u{e0c0}') {
+        for character in ('\u{e0a0}'..'\u{e0b0}').chain('\u{e0c0}'..'\u{e0d0}') {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_none());
+        }
+    }
+
+    #[test]
+    fn powerline_extra_glyphs_render_non_empty_masks() {
+        let offset = Default::default();
+        let glyph_offset = Default::default();
+
+        for character in '\u{e0b8}'..='\u{e0bf}' {
+            let glyph = builtin_glyph(character, &METRICS, &offset, &glyph_offset).unwrap();
+
+            assert!(glyph_has_pixels(glyph), "expected {character:?} to render pixels");
         }
     }
 
@@ -1164,5 +1370,84 @@ mod tests {
         for character in ('\u{27f0}'..'\u{2800}').chain('\u{2900}'..'\u{2910}') {
             assert!(builtin_glyph(character, &METRICS, &offset, &glyph_offset).is_none());
         }
+    }
+
+    #[test]
+    fn braille_dot_four_renders_in_right_top_position() {
+        let bounds = braille_bounds('\u{2808}');
+
+        assert_eq!(bounds, (4, 4, 1, 2));
+    }
+
+    #[test]
+    fn braille_dot_seven_renders_in_left_bottom_position() {
+        let bounds = braille_bounds('\u{2840}');
+
+        assert_eq!(bounds, (1, 1, 13, 14));
+    }
+
+    #[test]
+    fn legacy_eighth_bar_glyphs_render_single_segments() {
+        let vertical = box_drawing_bounds('\u{1fb70}');
+        let horizontal = box_drawing_bounds('\u{1fb76}');
+
+        assert_eq!(vertical, (1, 1, 0, 15));
+        assert_eq!(horizontal, (0, 5, 2, 3));
+    }
+
+    #[test]
+    fn legacy_rectangular_blocks_render_expected_bounds() {
+        assert_eq!(box_drawing_bounds('\u{1fbce}'), (0, 3, 0, 15));
+        assert_eq!(box_drawing_bounds('\u{1fbcf}'), (0, 1, 0, 15));
+        assert_eq!(box_drawing_bounds('\u{1fbe4}'), (1, 3, 0, 7));
+        assert_eq!(box_drawing_bounds('\u{1fbe5}'), (1, 3, 8, 15));
+        assert_eq!(box_drawing_bounds('\u{1cea0}'), (3, 5, 12, 15));
+    }
+
+    fn braille_bounds(character: char) -> (usize, usize, usize, usize) {
+        let offset = Default::default();
+        let glyph = braille_drawing(character, &METRICS, &offset);
+        glyph_bounds(glyph)
+    }
+
+    fn box_drawing_bounds(character: char) -> (usize, usize, usize, usize) {
+        let offset = Default::default();
+        let glyph = box_drawing(character, &METRICS, &offset);
+        glyph_bounds(glyph)
+    }
+
+    fn glyph_bounds(glyph: RasterizedGlyph) -> (usize, usize, usize, usize) {
+        let BitmapBuffer::Rgb(buffer) = glyph.buffer else {
+            panic!("expected RGB buffer");
+        };
+
+        let width = glyph.width as usize;
+        let mut min_x = usize::MAX;
+        let mut max_x = 0;
+        let mut min_y = usize::MAX;
+        let mut max_y = 0;
+
+        for (index, pixel) in buffer.chunks_exact(3).enumerate() {
+            if pixel[0] == 0 {
+                continue;
+            }
+
+            let x = index % width;
+            let y = index / width;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+
+        (min_x, max_x, min_y, max_y)
+    }
+
+    fn glyph_has_pixels(glyph: RasterizedGlyph) -> bool {
+        let BitmapBuffer::Rgb(buffer) = glyph.buffer else {
+            panic!("expected RGB buffer");
+        };
+
+        buffer.chunks_exact(3).any(|pixel| pixel[0] != 0)
     }
 }
