@@ -5,3 +5,4 @@ src/
 alacritty-src/
 *.pkg.tar.zst
 *.pkg.tar.zst.sig
+.omca/
