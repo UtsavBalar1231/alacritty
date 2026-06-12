@@ -746,13 +746,14 @@ mod tests {
         let message =
             App::try_parse_from(["alacritty", "select-tab", "--tab-index", "3"]).unwrap().message;
 
-        assert_eq!(
-            message,
-            SocketMessage::SelectTab(TabSelect {
-                window: TabWindowTarget::default(),
-                selector: TabSelector { tab_index: Some(3), ..Default::default() },
-            })
-        );
+        // NOTE: `TabWindowTarget::window_id` is populated from the `ALACRITTY_WINDOW_ID`
+        // environment variable, which is set whenever the test runs inside Alacritty (e.g.
+        // during a local package build). Assert only on the selector so the test stays
+        // deterministic regardless of the ambient environment.
+        let SocketMessage::SelectTab(select) = message else {
+            panic!("expected SelectTab, got {message:?}");
+        };
+        assert_eq!(select.selector, TabSelector { tab_index: Some(3), ..Default::default() });
     }
 
     #[cfg(unix)]
