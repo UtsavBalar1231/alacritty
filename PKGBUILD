@@ -1,8 +1,8 @@
 # Maintainer: Utsav Balar <utsav@local>
 
-pkgname=alacritty-git
+pkgname=alacritty-dev
 _pkgname=alacritty
-pkgver=0.18.0.dev.r2506.gf3d2b7d.local
+pkgver=0.18.0.dev.r2507.g90e8907.local
 pkgrel=1
 pkgdesc="A cross-platform, GPU-accelerated terminal emulator with local patches"
 arch=('x86_64')
@@ -30,11 +30,17 @@ makedepends=(
 checkdepends=('ttf-dejavu')
 optdepends=('ncurses: for the alacritty terminfo database')
 provides=('alacritty')
-conflicts=('alacritty')
+conflicts=('alacritty' 'alacritty-git')
+replaces=('alacritty-git')
+# No remote sources: this package is built strictly from the local checkout.
 source=()
 sha256sums=()
 
-_srcdir="${ALACRITTY_SRC:-${startdir:-$PWD}}"
+# Always build and package from this local working tree, never a remote clone.
+# `startdir` is the directory containing this PKGBUILD (exported by makepkg);
+# ALACRITTY_SRC is an optional override that must also point at a local checkout.
+# realpath guarantees an absolute path regardless of the invoking directory.
+_srcdir="$(realpath "${ALACRITTY_SRC:-${startdir:-$PWD}}")"
 
 pkgver() {
   cd "${_srcdir}"
