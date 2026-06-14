@@ -2,7 +2,7 @@
 
 pkgname=alacritty-dev
 _pkgname=alacritty
-pkgver=0.18.0.dev.r2507.g90e8907.local
+pkgver=0.18.0.dev.r2519.g79bf1c7
 pkgrel=1
 pkgdesc="A cross-platform, GPU-accelerated terminal emulator with local patches"
 arch=('x86_64')
