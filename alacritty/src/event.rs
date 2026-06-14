@@ -1149,6 +1149,8 @@ pub enum EventType {
     BlinkCursor,
     BlinkCursorTimeout,
     SearchNext,
+    /// Fired by `Topic::GraphicsAnimation` timer; triggers animation frame advance.
+    GraphicsAnimation,
     #[cfg(unix)]
     Shutdown,
     Frame,
@@ -2503,6 +2505,22 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         self.scheduler.schedule(event, blinking_timeout, false, timer_id);
     }
 
+    /// Schedule a one-shot `GraphicsAnimation` timer for the next frame advance.
+    /// No-op (and no timer created) when `active_animation_count == 0`.
+    pub fn schedule_graphics_animation(&mut self) {
+        let window_id = self.display.window.id();
+        let timer_id = TimerId::new(Topic::GraphicsAnimation, window_id);
+        self.scheduler.unschedule(timer_id);
+        let now_ms =
+            std::time::SystemTime::UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
+        let next = self.terminal.graphics().scan_active_animations(now_ms);
+        if let Some(gap) = next {
+            let gap = gap.max(Duration::from_millis(1));
+            let event = Event::new(EventType::GraphicsAnimation, window_id);
+            self.scheduler.schedule(event, gap, false, timer_id);
+        }
+    }
+
     /// Perform vi mode inline search in the specified direction.
     fn inline_search(&mut self, direction: Direction) {
         let c = match self.inline_search_state.character {
@@ -2691,6 +2709,18 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     *self.ctx.cursor_blink_timed_out = true;
                     self.ctx.display.cursor_hidden = false;
                     *self.ctx.dirty = true;
+                },
+                EventType::GraphicsAnimation => {
+                    let now_ms = std::time::SystemTime::UNIX_EPOCH
+                        .elapsed()
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let advanced = self.ctx.terminal.graphics_mut().advance_animations(now_ms);
+                    if advanced {
+                        *self.ctx.dirty = true;
+                    }
+                    // Reschedule only if more frames are pending (no-op when idle).
+                    self.ctx.schedule_graphics_animation();
                 },
                 // Add message only if it's not already queued.
                 EventType::Message(message) if !self.ctx.message_buffer.is_queued(&message) => {

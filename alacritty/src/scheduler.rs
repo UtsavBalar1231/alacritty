@@ -32,6 +32,8 @@ pub enum Topic {
     #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
     ActivationOpenPoll,
     Frame,
+    /// One-shot timer that fires when the next animation frame is due.
+    GraphicsAnimation,
 }
 
 /// Event scheduled to be emitted at a specific time.

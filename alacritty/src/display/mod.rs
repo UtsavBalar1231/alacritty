@@ -27,6 +27,7 @@ use crossfont::{Rasterize, Rasterizer, Size as FontSize};
 use unicode_width::UnicodeWidthChar;
 
 use alacritty_terminal::event::{EventListener, OnResize, WindowSize};
+use alacritty_terminal::graphics::{ImageId, ZBucket};
 use alacritty_terminal::grid::Dimensions as TermDimensions;
 use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::Selection;
@@ -54,6 +55,7 @@ pub mod tab_bar;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
+use crate::renderer::graphics::GraphicsRenderer;
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
@@ -400,6 +402,7 @@ pub struct Display {
 
     renderer: ManuallyDrop<Renderer>,
     renderer_preference: Option<RendererPreference>,
+    graphics_renderer: GraphicsRenderer,
 
     surface: ManuallyDrop<Surface<WindowSurface>>,
 
@@ -447,6 +450,10 @@ impl Display {
 
         // Create renderer.
         let mut renderer = Renderer::new(&context, config.debug.renderer)?;
+
+        // Create the image quad renderer (uses the same shader version as the text renderer).
+        let graphics_renderer =
+            GraphicsRenderer::new(renderer.shader_version()).map_err(renderer::Error::Shader)?;
 
         // Load font common glyphs to accelerate rendering.
         debug!("Filling glyph cache with common glyphs");
@@ -538,6 +545,7 @@ impl Display {
             visual_bell: VisualBell::from(&config.bell),
             renderer: ManuallyDrop::new(renderer),
             renderer_preference: config.debug.renderer,
+            graphics_renderer,
             surface: ManuallyDrop::new(surface),
             colors: List::from(&config.colors),
             frame_timer: FrameTimer::new(),
@@ -837,6 +845,41 @@ impl Display {
         }
         terminal.reset_damage();
 
+        // Acquire graphics snapshot UNDER the terminal lock (before drop below).
+        // render_snapshot drains pending queues + runs GC; must not race the PTY thread.
+        // Upload dims are resolved here too — image table is gone after the drop.
+        let timestamp_ns =
+            std::time::SystemTime::UNIX_EPOCH.elapsed().map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let timestamp_ms = timestamp_ns / 1_000_000;
+        let mut gfx_snapshot = terminal.render_snapshot(timestamp_ns);
+
+        // Force full-frame damage on BOTH buffers whenever graphics are present or
+        // mutated. Damage only feeds `swap_buffers_with_damage`; under double buffering a
+        // small partial-damage frame (cursor blink, clock tick) presents only that rect,
+        // leaving an image region — or a deleted image's stale pixels — frozen in the
+        // alternate buffer (the ghost bands). Captured BEFORE `uploads` is drained below.
+        let graphics_dirty = gfx_snapshot.requires_full_damage();
+
+        let gfx_uploads: Vec<(ImageId, u32, u32, std::sync::Arc<Vec<u8>>)> = gfx_snapshot
+            .uploads
+            .drain(..)
+            .filter_map(|(id, data)| {
+                terminal.graphics().image(id).map(|img| (id, img.width, img.height, data))
+            })
+            .collect();
+
+        // Schedule the next animation frame timer if any images are animating.
+        // scan_active_animations early-outs at zero cost when nothing is active.
+        let window_id = self.window.id();
+        let anim_timer_id = TimerId::new(Topic::GraphicsAnimation, window_id);
+        if let Some(gap) = terminal.graphics().scan_active_animations(timestamp_ms) {
+            let gap = gap.max(std::time::Duration::from_millis(1));
+            if !scheduler.scheduled(anim_timer_id) {
+                let event = Event::new(EventType::GraphicsAnimation, window_id);
+                scheduler.schedule(event, gap, false, anim_timer_id);
+            }
+        }
+
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
@@ -847,10 +890,17 @@ impl Display {
 
         let requires_full_damage = self.visual_bell.intensity() != 0.
             || self.hint_state.active()
-            || search_state.regex().is_some();
+            || search_state.regex().is_some()
+            || graphics_dirty;
         if requires_full_damage {
+            self.damage_tracker.request_full_damage();
+        }
+        // While the latch is armed, force this present to full-frame damage. A
+        // single trigger refreshes FULL_DAMAGE_FRAMES consecutive presents so
+        // every buffer in a 3-4 deep Wayland swapchain is repainted, preventing
+        // stale graphics pixels (ghosting) from surfacing on a deep buffer.
+        if self.damage_tracker.full_damage_latched() {
             self.damage_tracker.frame().mark_fully_damaged();
-            self.damage_tracker.next_frame().mark_fully_damaged();
         }
 
         let vi_cursor_viewport_point =
@@ -861,14 +911,45 @@ impl Display {
         // Make sure this window's OpenGL context is active.
         self.make_current();
 
+        // Process graphics queue now that the GL context is current.
+        // Deletes first, then uploads (upload_texture_with_dims already handles replace).
+        self.graphics_renderer.sync_deletes(&mut gfx_snapshot);
+        for (id, width, height, data) in gfx_uploads {
+            self.graphics_renderer.upload_texture_with_dims(id, width, height, &data);
+        }
+
         self.renderer.clear(background_color, config.window_opacity());
+
+        // NDC projection shared by image and text renderers:
+        //   vec4(offset_x, offset_y, scale_x, scale_y)
+        let img_projection = {
+            let w = size_info.width();
+            let h = size_info.height();
+            let px = size_info.padding_x();
+            let py = size_info.padding_y();
+            let scale_x = 2. / (w - 2. * px);
+            let scale_y = -2. / (h - 2. * py);
+            [-1.0_f32, 1.0_f32, scale_x, scale_y]
+        };
+
+        // BelowBackground: z < i32::MIN/2, drawn behind the terminal background fill.
+        {
+            let bucket: Vec<_> = gfx_snapshot
+                .items
+                .iter()
+                .filter(|i| i.z_bucket == ZBucket::BelowBackground)
+                .cloned()
+                .collect();
+            self.graphics_renderer.draw(&bucket, &size_info, img_projection);
+        }
+
         let mut lines = RenderLines::new();
 
         // Optimize loop hint comparator.
         let has_highlighted_hint =
             self.highlighted_hint.is_some() || self.vi_highlighted_hint.is_some();
 
-        // Draw grid.
+        // Draw grid — cell-background pass (z-bucket split: bg drawn here, glyphs drawn below).
         {
             let _sampler = self.meter.sampler();
 
@@ -901,8 +982,24 @@ impl Display {
 
                 cell
             });
-            self.renderer.draw_cells(&size_info, glyph_cache, cells);
+
+            // Background-colour pass — collects cells into renderer.cell_buffer for glyph pass.
+            self.renderer.draw_cell_backgrounds(&size_info, glyph_cache, cells);
         }
+
+        // BetweenBgAndText: i32::MIN/2 ≤ z < 0, above cell backgrounds and below glyphs.
+        {
+            let bucket: Vec<_> = gfx_snapshot
+                .items
+                .iter()
+                .filter(|i| i.z_bucket == ZBucket::BetweenBgAndText)
+                .cloned()
+                .collect();
+            self.graphics_renderer.draw(&bucket, &size_info, img_projection);
+        }
+
+        // Glyph pass — consumes cell_buffer filled by draw_cell_backgrounds above.
+        self.renderer.draw_glyphs_pass(&size_info, &mut self.glyph_cache);
 
         let mut rects = lines.rects(&metrics, &size_info);
 
@@ -1090,6 +1187,19 @@ impl Display {
             };
 
             self.draw_ime_preview(point, fg, bg, &mut rects, config);
+        }
+
+        // AboveText: z >= 0, drawn on top of glyphs.
+        // NOTE: per-bbox partial damage (add_viewport_rect per image rect) is the post-v1
+        // optimization; v1 uses full damage from mark_fully_damaged on any graphics mutation.
+        {
+            let bucket: Vec<_> = gfx_snapshot
+                .items
+                .iter()
+                .filter(|i| i.z_bucket == ZBucket::AboveText)
+                .cloned()
+                .collect();
+            self.graphics_renderer.draw(&bucket, &size_info, img_projection);
         }
 
         if let Some(message) = message_buffer.message() {

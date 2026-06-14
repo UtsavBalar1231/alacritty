@@ -9,6 +9,13 @@ use alacritty_terminal::term::{LineDamageBounds, TermDamageIterator};
 
 use crate::display::SizeInfo;
 
+/// Consecutive full-damage presents forced after a full-frame trigger (graphics
+/// present/mutate, visual bell, hint, search). A partial present only refreshes
+/// the damaged rect of *this* physical buffer; Wayland compositors cycle 3-4
+/// buffers, so a partial present on a buffer that predates the on-screen image
+/// leaks stale pixels (ghosting). Sized to refresh a quad-deep swapchain.
+const FULL_DAMAGE_FRAMES: u8 = 4;
+
 /// State of the damage tracking for the [`Display`].
 ///
 /// [`Display`]: crate::display::Display
@@ -20,6 +27,15 @@ pub struct DamageTracker {
     pub old_selection: Option<SelectionRange>,
     /// Highlight damage submitted for the compositor.
     pub debug: bool,
+
+    /// Remaining upcoming presents that must use full-frame damage.
+    ///
+    /// Armed via [`DamageTracker::request_full_damage`] and decremented once per
+    /// [`DamageTracker::swap_damage`]. While non-zero the display forces the
+    /// active frame fully damaged, so the whole compositor swapchain is
+    /// refreshed instead of just a double buffer. Stays `0` for text-only
+    /// sessions, which keep partial-damage presentation and pay nothing.
+    full_damage_frames: u8,
 
     /// The damage for the frames.
     frames: [FrameDamage; 2],
@@ -35,6 +51,7 @@ impl DamageTracker {
             debug: false,
             old_vi_cursor: None,
             old_selection: None,
+            full_damage_frames: 0,
             frames: Default::default(),
         };
         tracker.resize(screen_lines, columns);
@@ -53,6 +70,19 @@ impl DamageTracker {
         &mut self.frames[1]
     }
 
+    /// Arm the multi-frame full-damage latch covering the compositor's swapchain.
+    #[inline]
+    pub fn request_full_damage(&mut self) {
+        self.full_damage_frames = FULL_DAMAGE_FRAMES;
+    }
+
+    /// Whether upcoming presents must still be forced to full-frame damage.
+    #[inline]
+    #[must_use]
+    pub fn full_damage_latched(&self) -> bool {
+        self.full_damage_frames > 0
+    }
+
     /// Advance to the next frame resetting the state for the active frame.
     #[inline]
     pub fn swap_damage(&mut self) {
@@ -60,6 +90,7 @@ impl DamageTracker {
         let columns = self.columns;
         self.frame().reset(screen_lines, columns);
         self.frames.swap(0, 1);
+        self.full_damage_frames = self.full_damage_frames.saturating_sub(1);
     }
 
     /// Resize the damage information in the tracker.
@@ -349,6 +380,37 @@ mod tests {
         let rect = Rect::new(bound * 2, bound * 2, rect_side, rect_side);
         let rect = RenderDamageIterator::overdamage(&size_info, rect);
         assert_eq!(Rect::new(bound * 2 - cell_size, bound * 2 - cell_size / 2, 0, 0), rect);
+    }
+
+    #[test]
+    fn full_damage_latch_spans_buffer_ring() {
+        let mut tracker = DamageTracker::new(10, 10);
+
+        // Idle: no latch, partial damage allowed.
+        assert!(!tracker.full_damage_latched());
+
+        // One trigger must force exactly FULL_DAMAGE_FRAMES consecutive full
+        // presents, covering a 3-4 deep swapchain (not just a double buffer).
+        tracker.request_full_damage();
+        let mut full_presents = 0;
+        for _ in 0..(FULL_DAMAGE_FRAMES as usize + 3) {
+            if tracker.full_damage_latched() {
+                tracker.frame().mark_fully_damaged();
+            }
+            if tracker.frames[0].full {
+                full_presents += 1;
+            }
+            tracker.swap_damage();
+        }
+        assert_eq!(full_presents, FULL_DAMAGE_FRAMES as usize);
+        assert!(!tracker.full_damage_latched());
+
+        // Re-arming each frame (image present every frame) keeps it latched.
+        for _ in 0..8 {
+            tracker.request_full_damage();
+            assert!(tracker.full_damage_latched());
+            tracker.swap_damage();
+        }
     }
 
     #[test]
