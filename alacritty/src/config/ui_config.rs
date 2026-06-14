@@ -29,6 +29,7 @@ use crate::config::cursor::Cursor;
 use crate::config::debug::Debug;
 use crate::config::font::Font;
 use crate::config::general::General;
+use crate::config::graphics::Graphics;
 use crate::config::mouse::Mouse;
 use crate::config::open::OpenConfig;
 use crate::config::scrolling::Scrolling;
@@ -90,6 +91,9 @@ pub struct UiConfig {
     /// Config for the alacritty_terminal itself.
     pub terminal: Terminal,
 
+    /// Terminal graphics protocol configuration.
+    pub graphics: Graphics,
+
     /// Keyboard configuration.
     keyboard: Keyboard,
 
@@ -128,6 +132,7 @@ impl UiConfig {
             default_cursor_style: self.cursor.style(),
             osc52: self.terminal.osc52.0,
             kitty_keyboard: true,
+            graphics: self.graphics.options(),
         }
     }
 
