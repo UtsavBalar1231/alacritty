@@ -189,6 +189,13 @@ impl<'a> TextRenderer<'a> for Gles2Renderer {
             gl::ActiveTexture(gl::TEXTURE0);
         }
 
+        // The image/graphics renderer binds and unbinds GL_TEXTURE_2D between our
+        // passes (it leaves texture 0 bound), so the cached `active_tex` is stale on
+        // entry. Reset it to force the first batch to rebind the glyph atlas; without
+        // this the glyph shader samples texture 0 and renders invisible glyphs over
+        // visible cell backgrounds whenever an image is on screen.
+        self.active_tex = 0;
+
         let res = func(RenderApi {
             active_tex: &mut self.active_tex,
             batch: &mut self.batch,
@@ -364,12 +371,10 @@ impl LoadGlyph for RenderApi<'_> {
     }
 }
 
-impl TextRenderApi<Batch> for RenderApi<'_> {
-    fn batch(&mut self) -> &mut Batch {
-        self.batch
-    }
-
-    fn render_batch(&mut self) {
+impl RenderApi<'_> {
+    /// Upload the current batch to the GPU (VBO upload + texture bind).
+    /// Does NOT issue any draw calls or clear the batch.
+    fn upload_batch(&mut self) {
         unsafe {
             gl::BufferSubData(
                 gl::ARRAY_BUFFER,
@@ -385,40 +390,88 @@ impl TextRenderApi<Batch> for RenderApi<'_> {
             }
             *self.active_tex = self.batch.tex();
         }
+    }
 
-        unsafe {
-            let num_indices = (self.batch.len() / 4 * 6) as i32;
+    /// Issue the glyph draw calls (SubpixelPass1+). Assumes VBO is already uploaded.
+    fn draw_glyph_passes(&mut self) {
+        let num_indices = (self.batch.len() / 4 * 6) as i32;
 
-            // The rendering is inspired by
-            // https://github.com/servo/webrender/blob/master/webrender/doc/text-rendering.md.
-
-            // Draw background.
-            self.program.set_rendering_pass(RenderingPass::Background);
-            gl::BlendFunc(gl::ONE, gl::ZERO);
-            gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
-
-            self.program.set_rendering_pass(RenderingPass::SubpixelPass1);
-            if self.dual_source_blending {
-                // Text rendering pass.
+        self.program.set_rendering_pass(RenderingPass::SubpixelPass1);
+        if self.dual_source_blending {
+            unsafe {
                 gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-            } else {
-                // First text rendering pass.
+            }
+        } else {
+            unsafe {
                 gl::BlendFuncSeparate(gl::ZERO, gl::ONE_MINUS_SRC_COLOR, gl::ZERO, gl::ONE);
                 gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
-
-                // Second text rendering pass.
-                self.program.set_rendering_pass(RenderingPass::SubpixelPass2);
+            }
+            self.program.set_rendering_pass(RenderingPass::SubpixelPass2);
+            unsafe {
                 gl::BlendFuncSeparate(gl::ONE_MINUS_DST_ALPHA, gl::ONE, gl::ZERO, gl::ONE);
                 gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
-
-                // Third text rendering pass.
-                self.program.set_rendering_pass(RenderingPass::SubpixelPass3);
+            }
+            self.program.set_rendering_pass(RenderingPass::SubpixelPass3);
+            unsafe {
                 gl::BlendFuncSeparate(gl::ONE, gl::ONE, gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
             }
+        }
 
+        unsafe {
+            gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
+        }
+    }
+}
+
+impl TextRenderApi<Batch> for RenderApi<'_> {
+    fn batch(&mut self) -> &mut Batch {
+        self.batch
+    }
+
+    fn render_batch(&mut self) {
+        self.upload_batch();
+
+        let num_indices = (self.batch.len() / 4 * 6) as i32;
+        self.program.set_rendering_pass(RenderingPass::Background);
+        unsafe {
+            gl::BlendFunc(gl::ONE, gl::ZERO);
+            gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
+        }
+        self.draw_glyph_passes();
+
+        self.batch.clear();
+    }
+
+    fn render_batch_background_only(&mut self) {
+        self.upload_batch();
+
+        let num_indices = (self.batch.len() / 4 * 6) as i32;
+        self.program.set_rendering_pass(RenderingPass::Background);
+        unsafe {
+            gl::BlendFunc(gl::ONE, gl::ZERO);
             gl::DrawElements(gl::TRIANGLES, num_indices, gl::UNSIGNED_SHORT, ptr::null());
         }
 
+        // Restore blend state so subsequent ops have a defined starting point.
+        if self.dual_source_blending {
+            unsafe { gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR) };
+        } else {
+            unsafe {
+                gl::BlendFuncSeparate(
+                    gl::SRC_ALPHA,
+                    gl::ONE_MINUS_SRC_ALPHA,
+                    gl::SRC_ALPHA,
+                    gl::ONE,
+                );
+            }
+        }
+
+        self.batch.clear();
+    }
+
+    fn render_batch_glyphs_only(&mut self) {
+        self.upload_batch();
+        self.draw_glyph_passes();
         self.batch.clear();
     }
 }

@@ -54,7 +54,7 @@ pub trait TextRenderer<'a> {
     /// Get loader API for the renderer.
     fn loader_api(&mut self) -> LoaderApi<'_>;
 
-    /// Draw cells.
+    /// Draw cells (combined background + glyph pass — original single-pass entry point).
     fn draw_cells<'b: 'a, I: Iterator<Item = RenderableCell>>(
         &'b mut self,
         size_info: &'b SizeInfo,
@@ -64,6 +64,34 @@ pub trait TextRenderer<'a> {
         self.with_api(size_info, |mut api| {
             for cell in cells {
                 api.draw_cell(cell, glyph_cache, size_info);
+            }
+        })
+    }
+
+    /// Draw only the cell background colour pass for the given cells.
+    fn draw_cell_backgrounds<'b: 'a, 'c>(
+        &'b mut self,
+        size_info: &'b SizeInfo,
+        glyph_cache: &'a mut GlyphCache,
+        cells: &'c [RenderableCell],
+    ) {
+        self.with_api(size_info, |mut api| {
+            for cell in cells {
+                api.draw_cell_background_only(cell.clone(), glyph_cache, size_info);
+            }
+        })
+    }
+
+    /// Draw only the glyph pass for the given cells (subpixel / dual-source blending).
+    fn draw_glyphs_pass<'b: 'a, 'c>(
+        &'b mut self,
+        size_info: &'b SizeInfo,
+        glyph_cache: &'a mut GlyphCache,
+        cells: &'c [RenderableCell],
+    ) {
+        self.with_api(size_info, |mut api| {
+            for cell in cells {
+                api.draw_cell_glyph_only(cell.clone(), glyph_cache, size_info);
             }
         })
     }
@@ -112,10 +140,16 @@ pub trait TextRenderApi<T: TextRenderBatch>: LoadGlyph {
     /// Get `Batch` the api is using.
     fn batch(&mut self) -> &mut T;
 
-    /// Render the underlying data.
+    /// Render the underlying data (combined bg + glyph passes).
     fn render_batch(&mut self);
 
-    /// Add item to the rendering queue.
+    /// Render only the background pass of the current batch, then clear.
+    fn render_batch_background_only(&mut self);
+
+    /// Render only the glyph passes of the current batch, then clear.
+    fn render_batch_glyphs_only(&mut self);
+
+    /// Add item to the rendering queue, flushing with the combined render.
     #[inline]
     fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph, size_info: &SizeInfo) {
         // Flush batch if tex changing.
@@ -131,29 +165,48 @@ pub trait TextRenderApi<T: TextRenderBatch>: LoadGlyph {
         }
     }
 
-    /// Draw cell.
+    /// Add item to queue, flushing with background-only render when full/tex-change.
+    #[inline]
+    fn add_render_item_background_only(
+        &mut self,
+        cell: &RenderableCell,
+        glyph: &Glyph,
+        size_info: &SizeInfo,
+    ) {
+        if !self.batch().is_empty() && self.batch().tex() != glyph.tex_id {
+            self.render_batch_background_only();
+        }
+        self.batch().add_item(cell, glyph, size_info);
+        if self.batch().full() {
+            self.render_batch_background_only();
+        }
+    }
+
+    /// Add item to queue, flushing with glyph-only render when full/tex-change.
+    #[inline]
+    fn add_render_item_glyphs_only(
+        &mut self,
+        cell: &RenderableCell,
+        glyph: &Glyph,
+        size_info: &SizeInfo,
+    ) {
+        if !self.batch().is_empty() && self.batch().tex() != glyph.tex_id {
+            self.render_batch_glyphs_only();
+        }
+        self.batch().add_item(cell, glyph, size_info);
+        if self.batch().full() {
+            self.render_batch_glyphs_only();
+        }
+    }
+
+    /// Draw cell (background + glyphs combined — original path).
     fn draw_cell(
         &mut self,
         mut cell: RenderableCell,
         glyph_cache: &mut GlyphCache,
         size_info: &SizeInfo,
     ) {
-        // Get font key for cell.
-        let font_key = match cell.flags & Flags::BOLD_ITALIC {
-            Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
-            Flags::ITALIC => glyph_cache.italic_key,
-            Flags::BOLD => glyph_cache.bold_key,
-            _ => glyph_cache.font_key,
-        };
-
-        // Ignore hidden cells and render tabs as spaces to prevent font issues.
-        let hidden = cell.flags.contains(Flags::HIDDEN);
-        if cell.character == '\t' || hidden {
-            cell.character = ' ';
-        }
-
-        let mut glyph_key =
-            GlyphKey { font_key, size: glyph_cache.font_size, character: cell.character };
+        let (mut glyph_key, hidden) = resolve_glyph_key(&mut cell, glyph_cache);
 
         // Add cell to batch.
         let glyph = glyph_cache.get(glyph_key, self, true);
@@ -170,6 +223,69 @@ pub trait TextRenderApi<T: TextRenderBatch>: LoadGlyph {
             }
         }
     }
+
+    /// Draw cell — background colour pass only.
+    fn draw_cell_background_only(
+        &mut self,
+        mut cell: RenderableCell,
+        glyph_cache: &mut GlyphCache,
+        size_info: &SizeInfo,
+    ) {
+        let (glyph_key, _hidden) = resolve_glyph_key(&mut cell, glyph_cache);
+
+        // Load glyph into atlas (idempotent if already cached), then batch for bg only.
+        let glyph = glyph_cache.get(glyph_key, self, true);
+        self.add_render_item_background_only(&cell, &glyph, size_info);
+
+        // Zero-width chars: no background contribution needed; skip for bg pass.
+    }
+
+    /// Draw cell — glyph pass only (subpixel / dual-source blending).
+    fn draw_cell_glyph_only(
+        &mut self,
+        mut cell: RenderableCell,
+        glyph_cache: &mut GlyphCache,
+        size_info: &SizeInfo,
+    ) {
+        let (mut glyph_key, hidden) = resolve_glyph_key(&mut cell, glyph_cache);
+
+        let glyph = glyph_cache.get(glyph_key, self, true);
+        self.add_render_item_glyphs_only(&cell, &glyph, size_info);
+
+        // Render visible zero-width characters.
+        if let Some(zerowidth) =
+            cell.extra.as_mut().and_then(|extra| extra.zerowidth.take().filter(|_| !hidden))
+        {
+            for character in zerowidth {
+                glyph_key.character = character;
+                let glyph = glyph_cache.get(glyph_key, self, false);
+                self.add_render_item_glyphs_only(&cell, &glyph, size_info);
+            }
+        }
+    }
+}
+
+/// Select font variant, normalise tab/hidden to space, and build the initial `GlyphKey`.
+///
+/// Returns `(glyph_key, hidden)`. `cell.character` is mutated in place when
+/// the cell is hidden or a tab, so callers must pass `&mut cell`.
+#[inline]
+fn resolve_glyph_key(cell: &mut RenderableCell, glyph_cache: &GlyphCache) -> (GlyphKey, bool) {
+    let font_key = match cell.flags & Flags::BOLD_ITALIC {
+        Flags::BOLD_ITALIC => glyph_cache.bold_italic_key,
+        Flags::ITALIC => glyph_cache.italic_key,
+        Flags::BOLD => glyph_cache.bold_key,
+        _ => glyph_cache.font_key,
+    };
+
+    // Ignore hidden cells and render tabs as spaces to prevent font issues.
+    let hidden = cell.flags.contains(Flags::HIDDEN);
+    if cell.character == '\t' || hidden {
+        cell.character = ' ';
+    }
+
+    let glyph_key = GlyphKey { font_key, size: glyph_cache.font_size, character: cell.character };
+    (glyph_key, hidden)
 }
 
 pub trait TextShader {

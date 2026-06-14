@@ -164,6 +164,13 @@ impl<'a> TextRenderer<'a> for Glsl3Renderer {
             gl::ActiveTexture(gl::TEXTURE0);
         }
 
+        // The image/graphics renderer binds and unbinds GL_TEXTURE_2D between our
+        // passes (it leaves texture 0 bound), so the cached `active_tex` is stale on
+        // entry. Reset it to force the first batch to rebind the glyph atlas; without
+        // this the glyph shader samples texture 0 and renders invisible glyphs over
+        // visible cell backgrounds whenever an image is on screen.
+        self.active_tex = 0;
+
         let res = func(RenderApi {
             active_tex: &mut self.active_tex,
             batch: &mut self.batch,
@@ -215,12 +222,10 @@ pub struct RenderApi<'a> {
     program: &'a mut TextShaderProgram,
 }
 
-impl TextRenderApi<Batch> for RenderApi<'_> {
-    fn batch(&mut self) -> &mut Batch {
-        self.batch
-    }
-
-    fn render_batch(&mut self) {
+impl RenderApi<'_> {
+    /// Upload the current batch to the GPU (VBO upload + texture bind).
+    /// Does NOT issue any draw calls or clear the batch.
+    fn upload_batch(&mut self) {
         unsafe {
             gl::BufferSubData(
                 gl::ARRAY_BUFFER,
@@ -230,13 +235,22 @@ impl TextRenderApi<Batch> for RenderApi<'_> {
             );
         }
 
-        // Bind texture if necessary.
         if *self.active_tex != self.batch.tex() {
             unsafe {
                 gl::BindTexture(gl::TEXTURE_2D, self.batch.tex());
             }
             *self.active_tex = self.batch.tex();
         }
+    }
+}
+
+impl TextRenderApi<Batch> for RenderApi<'_> {
+    fn batch(&mut self) -> &mut Batch {
+        self.batch
+    }
+
+    fn render_batch(&mut self) {
+        self.upload_batch();
 
         unsafe {
             self.program.set_rendering_pass(RenderingPass::Background);
@@ -247,6 +261,40 @@ impl TextRenderApi<Batch> for RenderApi<'_> {
                 ptr::null(),
                 self.batch.len() as GLsizei,
             );
+            self.program.set_rendering_pass(RenderingPass::SubpixelPass1);
+            gl::DrawElementsInstanced(
+                gl::TRIANGLES,
+                6,
+                gl::UNSIGNED_INT,
+                ptr::null(),
+                self.batch.len() as GLsizei,
+            );
+        }
+
+        self.batch.clear();
+    }
+
+    fn render_batch_background_only(&mut self) {
+        self.upload_batch();
+
+        unsafe {
+            self.program.set_rendering_pass(RenderingPass::Background);
+            gl::DrawElementsInstanced(
+                gl::TRIANGLES,
+                6,
+                gl::UNSIGNED_INT,
+                ptr::null(),
+                self.batch.len() as GLsizei,
+            );
+        }
+
+        self.batch.clear();
+    }
+
+    fn render_batch_glyphs_only(&mut self) {
+        self.upload_batch();
+
+        unsafe {
             self.program.set_rendering_pass(RenderingPass::SubpixelPass1);
             gl::DrawElementsInstanced(
                 gl::TRIANGLES,

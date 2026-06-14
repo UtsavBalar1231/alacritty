@@ -18,14 +18,15 @@ use alacritty_terminal::term::cell::Flags;
 use crate::config::debug::RendererPreference;
 use crate::display::SizeInfo;
 use crate::display::color::Rgb;
-use crate::display::content::RenderableCell;
+pub use crate::display::content::RenderableCell;
 use crate::gl;
 use crate::renderer::rects::{RectRenderer, RenderRect};
 use crate::renderer::shader::ShaderError;
 
+pub mod graphics;
 pub mod platform;
 pub mod rects;
-mod shader;
+pub mod shader;
 mod text;
 
 pub use text::{GlyphCache, LoaderApi};
@@ -90,6 +91,8 @@ pub struct Renderer {
     text_renderer: TextRendererProvider,
     rect_renderer: RectRenderer,
     robustness: bool,
+    /// Buffered cells from `draw_cell_backgrounds` to be consumed by `draw_glyphs_pass`.
+    cell_buffer: Vec<RenderableCell>,
 }
 
 /// Wrapper around gl::GetString with error checking and reporting.
@@ -171,7 +174,7 @@ impl Renderer {
             }
         }
 
-        Ok(Self { text_renderer, rect_renderer, robustness })
+        Ok(Self { text_renderer, rect_renderer, robustness, cell_buffer: Vec::new() })
     }
 
     pub fn draw_cells<I: Iterator<Item = RenderableCell>>(
@@ -188,6 +191,44 @@ impl Renderer {
                 renderer.draw_cells(size_info, glyph_cache, cells)
             },
         }
+    }
+
+    /// Draw only the cell background colour pass and buffer the cells for the follow-up
+    /// `draw_glyphs_pass` call.  Any previously buffered cells are discarded.
+    ///
+    /// Call sequence for z-bucketed image compositing:
+    ///   draw_cell_backgrounds → images(BetweenBgAndText) → draw_glyphs_pass
+    pub fn draw_cell_backgrounds<I: Iterator<Item = RenderableCell>>(
+        &mut self,
+        size_info: &SizeInfo,
+        glyph_cache: &mut GlyphCache,
+        cells: I,
+    ) {
+        self.cell_buffer.clear();
+        self.cell_buffer.extend(cells);
+        let buf: &[RenderableCell] = &self.cell_buffer;
+        match &mut self.text_renderer {
+            TextRendererProvider::Gles2(renderer) => {
+                renderer.draw_cell_backgrounds(size_info, glyph_cache, buf)
+            },
+            TextRendererProvider::Glsl3(renderer) => {
+                renderer.draw_cell_backgrounds(size_info, glyph_cache, buf)
+            },
+        }
+    }
+
+    /// Draw the glyph pass for the cells collected by the preceding `draw_cell_backgrounds` call.
+    pub fn draw_glyphs_pass(&mut self, size_info: &SizeInfo, glyph_cache: &mut GlyphCache) {
+        let buf: &[RenderableCell] = &self.cell_buffer;
+        match &mut self.text_renderer {
+            TextRendererProvider::Gles2(renderer) => {
+                renderer.draw_glyphs_pass(size_info, glyph_cache, buf)
+            },
+            TextRendererProvider::Glsl3(renderer) => {
+                renderer.draw_glyphs_pass(size_info, glyph_cache, buf)
+            },
+        }
+        self.cell_buffer.clear();
     }
 
     /// Draw a string in a variable location. Used for printing the render timer, warnings and
@@ -317,6 +358,13 @@ impl Renderer {
         } else {
             info!("GPU reset notifications are disabled");
             false
+        }
+    }
+
+    pub fn shader_version(&self) -> ShaderVersion {
+        match &self.text_renderer {
+            TextRendererProvider::Gles2(_) => ShaderVersion::Gles2,
+            TextRendererProvider::Glsl3(_) => ShaderVersion::Glsl3,
         }
     }
 
