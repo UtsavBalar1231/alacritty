@@ -24,6 +24,13 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Open actions can launch matching URLs in a new Alacritty tab or window
 - Desktop activation tokens for external URL opening on Linux/BSD when available
 - Explicit font symbol range mappings through `font.symbol_map`
+- Terminal graphics protocol support: kitty graphics protocol (APC G commands,
+  placements, animation frames, unicode-placeholder v1), Sixel inline images,
+  and iTerm2 inline images (`ESC]1337;File=`)
+- `graphics` config section with master switch (`enabled`), per-protocol
+  toggles (`kitty_protocol`, `sixel`, `iterm2`), and image storage quota
+  (`max_storage_mib`, default 320 MiB; frame data capped at 5×); all storage
+  is in-memory — no disk cache
 
 ### Changed
 

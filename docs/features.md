@@ -82,3 +82,64 @@ that.
 Alacritty supports running multiple terminal emulators from the same Alacritty
 instance. New windows can be created either by using the `CreateNewWindow`
 keybinding action, or by executing the `alacritty msg create-window` subcommand.
+
+## Terminal Graphics
+
+Alacritty supports three terminal graphics protocols for displaying inline
+images. All three are enabled by default and can be toggled independently in the
+`[graphics]` config section.
+
+### Supported Protocols
+
+**Kitty graphics protocol** (`kitty_protocol = true`)  
+Full support for the kitty graphics protocol (APC `G` commands), including
+direct, base64, and shared-memory image upload, placement with optional Unicode
+placeholder (v1), delete commands, and multi-frame animations. Both the GLSL 3
+and GLES 2 renderer paths are supported.
+
+**Sixel** (`sixel = true`)  
+Sixel image sequences are decoded and displayed inline as images. Color
+registers use a per-image model.
+
+**iTerm2 inline images** (`iterm2 = true`)  
+The iTerm2 `ESC]1337;File=` inline image protocol is supported for common
+image formats (PNG, JPEG, GIF, WebP, and others).
+
+### Configuration
+
+```toml
+[graphics]
+enabled          = true   # master switch; disabling removes all images immediately
+kitty_protocol   = true
+sixel            = true
+iterm2           = true
+max_storage_mib  = 320    # decoded image storage quota in MiB (frame data capped at 5×)
+```
+
+Changes to `[graphics]` take effect on live config reload. Disabling `enabled`
+removes all displayed images immediately.
+
+### Known Divergences from kitty
+
+This implementation differs from kitty's reference in the following deliberate
+ways:
+
+- **No disk cache**: kitty spills animation frame data to disk to bound RAM
+  use. This fork keeps all frame data in memory, capped at five times
+  `max_storage_mib`. This avoids filesystem I/O at the cost of higher peak RAM
+  when large animated images are displayed.
+
+- **Reflow drops placements**: When the terminal grid is reflowed on window
+  resize, image placements are removed rather than re-anchored. kitty
+  re-anchors placements after reflow.
+
+- **Hard-delete scrolled-past placements**: Placements whose anchor row scrolls
+  off the top of the scrollback buffer are deleted immediately rather than
+  retained in scrollback.
+
+- **sRGB / color-space skip**: Images are uploaded to the GPU without
+  color-space conversion. kitty applies sRGB linearization during compositing.
+
+- **Unicode placeholder v1 only**: Only Unicode placeholder version 1
+  (single-codepoint per cell) is implemented. kitty's v2 diacritic column
+  indices are not supported.

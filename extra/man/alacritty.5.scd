@@ -784,6 +784,103 @@ Windows: _"powershell"_
 
 	Default: _"OnlyCopy"_
 
+# GRAPHICS
+
+This section documents the *[graphics]* table of the configuration file.
+
+Changes to this section apply on live config reload; disabling graphics
+removes all images from the terminal immediately.
+
+*enabled* = _true_ | _false_
+
+	Master switch for all terminal graphics protocols. When disabled,
+	graphics escape sequences are still consumed, but no images are stored
+	or displayed and protocol queries are answered with an error so
+	applications can detect the missing support.
+
+	Default: _true_
+
+*kitty_protocol* = _true_ | _false_
+
+	Enable the kitty graphics protocol.
+
+	Default: _true_
+
+*sixel* = _true_ | _false_
+
+	Enable sixel graphics.
+
+	Default: _true_
+
+*iterm2* = _true_ | _false_
+
+	Enable the iTerm2 inline image protocol.
+
+	Default: _true_
+
+*max_storage_mib* = _<integer>_
+
+	Storage quota for decoded image data in mebibytes. When the quota is
+	exceeded, images without visible placements are removed first, then the
+	least recently used images. Animation frame data may use up to five times
+	this quota; all storage is in memory — no disk cache is used.
+
+	Default: _320_
+
+## Supported Protocols
+
+All three graphics protocols are enabled by default. Each can be toggled
+independently via its config key while the master _enabled_ switch acts as a
+global override.
+
+*Kitty graphics protocol*
+	Full support for the kitty graphics protocol (APC _G_ command), including
+	image upload (direct, base64, shared memory), placement with optional
+	_unicode-placeholder_ (v1), delete commands, and animation frames.
+	Implements GLSL 3 and GLES 2 renderer paths. Only Unicode placeholder
+	version 1 is supported; v2 diacritics are not implemented.
+
+*Sixel*
+	Sixel image sequences are decoded and displayed inline. Color registers
+	follow the per-image model; the sixel scrolling mode is not implemented.
+
+*iTerm2 inline images*
+	The iTerm2 _ESC]1337;File=_ inline image protocol is supported for PNG,
+	JPEG, GIF, WebP, and other formats decodable by the image crate.
+
+## Known Divergences from kitty
+
+The following behaviors differ deliberately from kitty's reference
+implementation:
+
+*No disk cache*
+	kitty writes animation frame data to a temporary file on disk to bound RAM
+	use. This fork keeps all frame data in memory only, bounded by five times
+	_max_storage_mib_. This avoids filesystem I/O at the cost of higher peak
+	RAM when large animated images are displayed.
+
+*Reflow drops placements*
+	When the terminal grid is reflowed (e.g. on window resize), all image
+	placements are removed rather than re-anchored to their logical positions.
+	kitty re-anchors placements after reflow. Re-anchoring requires
+	character-cell tracking that is not yet implemented in this fork.
+
+*Hard-delete scrolled-past placements*
+	Placements whose anchor row scrolls off the top of the scrollback buffer
+	are deleted immediately. kitty retains them in the scrollback. This keeps
+	memory use bounded without a disk cache.
+
+*sRGB / color-space skip*
+	Images are uploaded to the GPU without color-space conversion. kitty
+	applies sRGB linearization for compositing. The visual difference is
+	negligible on typical terminal backgrounds, and skipping it avoids a
+	per-upload shader pass.
+
+*Unicode placeholder v1 only*
+	Only Unicode placeholder version 1 (single-codepoint per cell) is
+	implemented. kitty's newer v2 format (diacritic column indices) is not
+	supported.
+
 # MOUSE
 
 This section documents the *[mouse]* table of the configuration file.
