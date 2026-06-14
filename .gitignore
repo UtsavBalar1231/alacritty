@@ -1,8 +1,9 @@
 target
 AGENTS.md
 pkg/
-src/
+/src/
 alacritty-src/
 *.pkg.tar.zst
 *.pkg.tar.zst.sig
 .omca/
+.claude/
