@@ -11,22 +11,55 @@ use crate::grid::GridCell;
 use crate::index::Column;
 use crate::term::cell::ResetDiscriminant;
 
+// The high bit of `Row::occ` is repurposed as the image-placeholder flag.
+// Column counts never approach usize::MAX/2, so the bit is always free.
+const FLAG_IMAGE_PLACEHOLDERS: usize = 1 << (usize::BITS - 1);
+const OCC_MASK: usize = !FLAG_IMAGE_PLACEHOLDERS;
+
 /// A row in the grid.
 #[derive(Default, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Row<T> {
     inner: Vec<T>,
 
-    /// Maximum number of occupied entries.
-    ///
-    /// This is the upper bound on the number of elements in the row, which have been modified
-    /// since the last reset. All cells after this point are guaranteed to be equal.
+    /// Maximum number of occupied entries (low bits) plus a flag bit (high bit).
+    /// Use `occ_count()` / `set_occ_count()` / `has_image_placeholders()` accessors.
     pub(crate) occ: usize,
 }
 
 impl<T: PartialEq> PartialEq for Row<T> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
+    }
+}
+
+impl<T> Row<T> {
+    /// True when a cell in this row contains U+10EEEE (image placeholder).
+    #[inline]
+    pub fn has_image_placeholders(&self) -> bool {
+        self.occ & FLAG_IMAGE_PLACEHOLDERS != 0
+    }
+
+    /// Set or clear the image-placeholder flag.
+    #[inline]
+    pub fn set_image_placeholders(&mut self, val: bool) {
+        if val {
+            self.occ |= FLAG_IMAGE_PLACEHOLDERS;
+        } else {
+            self.occ &= OCC_MASK;
+        }
+    }
+
+    /// Read the occupied-cell count.
+    #[inline]
+    fn occ_count(&self) -> usize {
+        self.occ & OCC_MASK
+    }
+
+    /// Write the occupied-cell count, preserving the flag bit.
+    #[inline]
+    fn set_occ_count(&mut self, count: usize) {
+        self.occ = (self.occ & FLAG_IMAGE_PLACEHOLDERS) | (count & OCC_MASK);
     }
 }
 
@@ -81,7 +114,8 @@ impl<T: Default> Row<T> {
         let index = new_row.iter().rposition(|c| !c.is_empty()).map_or(0, |i| i + 1);
         new_row.truncate(index);
 
-        self.occ = min(self.occ, columns);
+        let count = min(self.occ_count(), columns);
+        self.set_occ_count(count);
 
         if new_row.is_empty() { None } else { Some(new_row) }
     }
@@ -98,15 +132,16 @@ impl<T: Default> Row<T> {
         // Mark all cells as dirty if template cell changed.
         let len = self.inner.len();
         if self.inner[len - 1].discriminant() != template.discriminant() {
-            self.occ = len;
+            self.set_occ_count(len);
         }
 
         // Reset every dirty cell in the row.
-        for item in &mut self.inner[0..self.occ] {
+        let occ = self.occ_count();
+        for item in &mut self.inner[0..occ] {
             item.reset(template);
         }
 
-        self.occ = 0;
+        self.occ = 0; // clears both count and flag
     }
 }
 
@@ -129,7 +164,8 @@ impl<T> Row<T> {
 
     #[inline]
     pub fn last_mut(&mut self) -> Option<&mut T> {
-        self.occ = self.inner.len();
+        let len = self.inner.len();
+        self.set_occ_count(len);
         self.inner.last_mut()
     }
 
@@ -138,13 +174,15 @@ impl<T> Row<T> {
     where
         T: GridCell,
     {
-        self.occ += vec.len();
+        let count = self.occ_count() + vec.len();
+        self.set_occ_count(count);
         self.inner.append(vec);
     }
 
     #[inline]
     pub fn append_front(&mut self, mut vec: Vec<T>) {
-        self.occ += vec.len();
+        let count = self.occ_count() + vec.len();
+        self.set_occ_count(count);
 
         vec.append(&mut self.inner);
         self.inner = vec;
@@ -161,7 +199,8 @@ impl<T> Row<T> {
 
     #[inline]
     pub fn front_split_off(&mut self, at: usize) -> Vec<T> {
-        self.occ = self.occ.saturating_sub(at);
+        let count = self.occ_count().saturating_sub(at);
+        self.set_occ_count(count);
 
         let mut split = self.inner.split_off(at);
         std::mem::swap(&mut split, &mut self.inner);
@@ -185,7 +224,8 @@ impl<'a, T> IntoIterator for &'a mut Row<T> {
 
     #[inline]
     fn into_iter(self) -> slice::IterMut<'a, T> {
-        self.occ = self.len();
+        let len = self.len();
+        self.set_occ_count(len);
         self.inner.iter_mut()
     }
 }
@@ -202,7 +242,8 @@ impl<T> Index<Column> for Row<T> {
 impl<T> IndexMut<Column> for Row<T> {
     #[inline]
     fn index_mut(&mut self, index: Column) -> &mut T {
-        self.occ = max(self.occ, *index + 1);
+        let count = max(self.occ_count(), *index + 1);
+        self.set_occ_count(count);
         &mut self.inner[index.0]
     }
 }
@@ -219,7 +260,8 @@ impl<T> Index<Range<Column>> for Row<T> {
 impl<T> IndexMut<Range<Column>> for Row<T> {
     #[inline]
     fn index_mut(&mut self, index: Range<Column>) -> &mut [T] {
-        self.occ = max(self.occ, *index.end);
+        let count = max(self.occ_count(), *index.end);
+        self.set_occ_count(count);
         &mut self.inner[(index.start.0)..(index.end.0)]
     }
 }
@@ -236,7 +278,8 @@ impl<T> Index<RangeTo<Column>> for Row<T> {
 impl<T> IndexMut<RangeTo<Column>> for Row<T> {
     #[inline]
     fn index_mut(&mut self, index: RangeTo<Column>) -> &mut [T] {
-        self.occ = max(self.occ, *index.end);
+        let count = max(self.occ_count(), *index.end);
+        self.set_occ_count(count);
         &mut self.inner[..(index.end.0)]
     }
 }
@@ -253,7 +296,8 @@ impl<T> Index<RangeFrom<Column>> for Row<T> {
 impl<T> IndexMut<RangeFrom<Column>> for Row<T> {
     #[inline]
     fn index_mut(&mut self, index: RangeFrom<Column>) -> &mut [T] {
-        self.occ = self.len();
+        let len = self.len();
+        self.set_occ_count(len);
         &mut self.inner[(index.start.0)..]
     }
 }
@@ -270,7 +314,8 @@ impl<T> Index<RangeFull> for Row<T> {
 impl<T> IndexMut<RangeFull> for Row<T> {
     #[inline]
     fn index_mut(&mut self, _: RangeFull) -> &mut [T] {
-        self.occ = self.len();
+        let len = self.len();
+        self.set_occ_count(len);
         &mut self.inner[..]
     }
 }
@@ -287,7 +332,8 @@ impl<T> Index<RangeToInclusive<Column>> for Row<T> {
 impl<T> IndexMut<RangeToInclusive<Column>> for Row<T> {
     #[inline]
     fn index_mut(&mut self, index: RangeToInclusive<Column>) -> &mut [T] {
-        self.occ = max(self.occ, *index.end + 1);
+        let count = max(self.occ_count(), *index.end + 1);
+        self.set_occ_count(count);
         &mut self.inner[..=(index.end.0)]
     }
 }

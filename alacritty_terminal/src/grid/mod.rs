@@ -150,6 +150,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
     }
 
+    /// Maximum scrollback depth this grid retains (configured history size; `0`
+    /// for the alt screen). Used by the graphics layer to bound how far a
+    /// classic image placement may scroll into history before it is GC'd.
+    #[inline]
+    pub fn max_scroll_limit(&self) -> usize {
+        self.max_scroll_limit
+    }
+
     /// Update the size of the scrollback history.
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();

@@ -406,6 +406,7 @@ fn range_width(
     tabs_width + separator_width + extra_width
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_tab_segments(
     tabs: &[PreparedTab<'_>],
     start_column: usize,

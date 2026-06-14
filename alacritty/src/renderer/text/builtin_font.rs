@@ -1209,11 +1209,9 @@ impl Canvas {
         for y in 0..self.height {
             for x in 0..self.width {
                 let diagonal_y = if falling_diagonal {
-                    if max_x == 0 { 0 } else { x * max_y / max_x }
-                } else if max_x == 0 {
-                    0
+                    (x * max_y).checked_div(max_x).unwrap_or(0)
                 } else {
-                    (max_x - x) * max_y / max_x
+                    ((max_x - x) * max_y).checked_div(max_x).unwrap_or(0)
                 };
 
                 let fill = if top { y <= diagonal_y } else { y >= diagonal_y };

@@ -4,6 +4,7 @@ members = [
     "alacritty_terminal",
     "alacritty_config",
     "alacritty_config_derive",
+    "vendored/vte",
 ]
 resolver = "2"
 
@@ -23,3 +24,5 @@ toml_edit = "0.25.11"
 # TODO: Validation of fix for #6978. Remove before next release and use released `x11-clipboard`.
 [patch.crates-io]
 x11-clipboard = { git = "https://github.com/quininer/x11-clipboard.git", rev = "19ab2163cf0bd0db607e827a5214571990307866" }
+# Vendored vte fork for graphics protocol support (APC/DCS plumbing). See vendored/vte/FORK.md.
+vte = { path = "vendored/vte" }
