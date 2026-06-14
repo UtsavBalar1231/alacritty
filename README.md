@@ -2,67 +2,124 @@
     <img width="200" alt="Alacritty Logo" src="https://raw.githubusercontent.com/alacritty/alacritty/master/extra/logo/compat/alacritty-term%2Bscanlines.png">
 </p>
 
-<h1 align="center">Alacritty - A fast, cross-platform, OpenGL terminal emulator</h1>
+<h1 align="center">Alacritty — graphics fork</h1>
 
 <p align="center">
-  <img alt="Alacritty - A fast, cross-platform, OpenGL terminal emulator"
-       src="https://raw.githubusercontent.com/alacritty/alacritty/master/extra/promo/alacritty-readme.png">
+  A downstream fork of <a href="https://github.com/alacritty/alacritty">Alacritty</a>, the fast,
+  cross-platform, OpenGL terminal emulator — extended with inline terminal graphics,
+  a built-in tab bar, and improved built-in glyph rendering.
 </p>
 
-## About
+## About this fork
 
-Alacritty is a modern terminal emulator that comes with sensible defaults, but
-allows for extensive [configuration](#configuration). By integrating with other
-applications, rather than reimplementing their functionality, it manages to
-provide a flexible set of [features](./docs/features.md) with high performance.
-The supported platforms currently consist of BSD, Linux, macOS and Windows.
+This is a personal fork of [Alacritty] maintained by Utsav Balar. It tracks
+upstream Alacritty and layers a set of additional features on top of it:
 
-The software is considered to be at a **beta** level of readiness; there are
-a few missing features and bugs to be fixed, but it is already used by many as
-a daily driver.
+- **Inline terminal graphics** via the kitty graphics protocol, Sixel, and the
+  iTerm2 inline-image protocol — display images directly in the grid.
+- **A built-in tab bar** with configurable position, separators, margins,
+  templates, and activity/bell indicators (upstream Alacritty has no tabs).
+- **Improved built-in glyph and symbol rendering** for box-drawing, block, and
+  related characters.
 
-Precompiled binaries are available from the [GitHub releases page](https://github.com/alacritty/alacritty/releases).
+Everything else is upstream Alacritty: the same renderer, the same configuration
+format, the same performance characteristics. The fork is additive — existing
+configs keep working, and every new feature is opt-out via configuration.
 
-Join [`#alacritty`] on libera.chat if you have questions or looking for a quick help.
+> This fork is **not** affiliated with or endorsed by the upstream Alacritty
+> project. Please do not report issues with these patches to upstream. The
+> changes here are not intended for upstream contribution.
 
-[`#alacritty`]: https://web.libera.chat/gamja/?channels=#alacritty
+[Alacritty]: https://github.com/alacritty/alacritty
 
-## Features
+## Fork features
 
-You can find an overview over the features available in Alacritty [here](./docs/features.md).
+### Terminal graphics
 
-## Further information
+Three inline-image protocols are supported, all enabled by default and
+independently toggleable in the `[graphics]` config section:
 
-- [Announcing Alacritty, a GPU-Accelerated Terminal Emulator](https://jwilm.io/blog/announcing-alacritty/) January 6, 2017
-- [A talk about Alacritty at the Rust Meetup January 2017](https://www.youtube.com/watch?v=qHOdYO3WUTk) January 19, 2017
-- [Alacritty Lands Scrollback, Publishes Benchmarks](https://jwilm.io/blog/alacritty-lands-scrollback/) September 17, 2018
+| Protocol | Trigger | Notes |
+|----------|---------|-------|
+| **kitty graphics protocol** | APC `_G` | Direct, base64, and shared-memory upload; placement with optional Unicode placeholder (v1); delete commands; multi-frame animations. Works on both the GLSL 3 and GLES 2 renderer paths. |
+| **Sixel** | DCS `q` | Sixel sequences decoded and displayed inline, with a per-image color-register model. |
+| **iTerm2 inline images** | OSC `1337;File=` | Common image formats (PNG, JPEG, GIF, WebP, …) displayed inline. |
 
-## Installation
+Images are composited in the OpenGL renderer, scroll with the grid, and are
+removed when their anchor scrolls out of the scrollback buffer. Tools that emit
+these protocols — e.g. `yazi`, `timg`, `chafa`, `img2sixel`, `viu`, and kitty's
+`icat` — display images inline.
 
-Alacritty can be installed by using various package managers on Linux, BSD,
-macOS and Windows.
+A full description of capabilities, the storage model, and the deliberate
+divergences from kitty's reference implementation is in
+[`docs/features.md`](./docs/features.md#terminal-graphics).
 
-Prebuilt binaries for macOS and Windows can also be downloaded from the
-[GitHub releases page](https://github.com/alacritty/alacritty/releases).
+### Built-in tab bar
 
-For everyone else, the detailed instructions to install Alacritty can be found
-[here](INSTALL.md).
+A lightweight tab bar rendered inside the Alacritty window, configured under
+`[window.tab_bar]`. Tabs are created and switched via keybinding actions
+(`CreateNewTab`, `CloseTab`, `SelectNextTab`, `SelectTab1`…`SelectTab9`,
+`MoveTabLeft`, …) or `alacritty msg`. It supports:
 
-### Requirements
+- Auto/Always/Never visibility, `Left`/`Center`/`Right` alignment.
+- `Plain` or `Separator` styles with a configurable separator string.
+- Horizontal and vertical (outer/inner) margins.
+- Tab title templates with `{index}`, `{title}`, `{activity}`, and `{bell}`
+  placeholders, plus separate active/inactive templates.
+- Per-tab activity and bell indicators.
+- Tab-bar colors via `[colors.tab_bar.active]` / `[colors.tab_bar.inactive]`.
 
-- At least OpenGL ES 2.0
-- [Windows] ConPTY support (Windows 10 version 1809 or higher)
+### Improved built-in glyph rendering
+
+When `font.builtin_box_drawing` is enabled (the default), box-drawing, block,
+and related symbol glyphs are rendered by Alacritty itself rather than the font,
+for crisp, gap-free lines and blocks regardless of the configured font.
 
 ## Configuration
 
-You can find the documentation for Alacritty's configuration in `man 5
-alacritty`, or by looking at [the website] if you do not have the manpages
-installed.
+The configuration format is identical to upstream Alacritty (see `man 5
+alacritty` or [the website]). The fork adds the following:
 
-[the website]: https://alacritty.org/config-alacritty.html
+```toml
+# Inline terminal graphics (kitty / Sixel / iTerm2).
+[graphics]
+enabled         = true   # master switch; disabling removes all images immediately
+kitty_protocol  = true
+sixel           = true
+iterm2          = true
+max_storage_mib = 320     # decoded-image storage quota in MiB (frame data capped at 5×)
 
-Alacritty doesn't create the config file for you, but it looks for one in the
-following locations:
+# Built-in tab bar.
+[window.tab_bar]
+visibility              = "Auto"        # Auto | Always | Never
+position                = "Bottom"      # Bottom (only supported position)
+alignment               = "Left"        # Left | Center | Right
+style                   = "Separator"   # Plain | Separator
+separator               = " ┇ "
+margin_width            = 0.0
+margin_height           = { outer = 0.0, inner = 0.0 }
+max_width               = 24
+min_width               = 6
+show_index              = true
+close_button            = "Hover"       # Never | Hover | Always
+# title_template        = "{index} {title}"
+# active_title_template = "{index} {title}"
+# inactive_title_template = "{bell}{activity}{index} {title}"
+activity_indicator      = "•"
+bell_indicator          = "!"
+show_activity_indicator = true
+
+# Crisp built-in box-drawing/symbol glyphs.
+[font]
+builtin_box_drawing = true
+```
+
+All of these honor `live_config_reload`. A fully worked example config —
+including tab keybindings, tab-bar colors, and a `[graphics]` section — lives in
+this repository's history and at `~/.config/alacritty/alacritty.toml` on the
+maintainer's system.
+
+Alacritty looks for its config file in (first match wins):
 
 1. `$XDG_CONFIG_HOME/alacritty/alacritty.toml`
 2. `$XDG_CONFIG_HOME/alacritty.toml`
@@ -70,45 +127,64 @@ following locations:
 4. `$HOME/.alacritty.toml`
 5. `/etc/alacritty/alacritty.toml`
 
-On Windows, the config file will be looked for in:
+[the website]: https://alacritty.org/config-alacritty.html
 
-* `%APPDATA%\alacritty\alacritty.toml`
+## Building & installing
 
-## Contributing
+### Requirements
 
-A guideline about contributing to Alacritty can be found in the
-[`CONTRIBUTING.md`](CONTRIBUTING.md) file.
+- A Rust toolchain (stable) and `cargo`.
+- At least OpenGL ES 2.0.
+- Build dependencies: `cmake`, `fontconfig`, `freetype2`, `libxcb`, plus the
+  usual X11/Wayland client libraries. `scdoc` is needed for the man pages.
 
-## FAQ
+### Arch Linux (recommended)
 
-**_Is it really the fastest terminal emulator?_**
+This repository ships a `PKGBUILD` that builds **strictly from the local
+working tree** (never a remote clone) and produces an `alacritty-dev` package
+that `conflicts`/`replaces` the stock `alacritty`:
 
-Benchmarking terminal emulators is complicated. Alacritty uses
-[vtebench](https://github.com/alacritty/vtebench) to quantify terminal emulator
-throughput and manages to consistently score better than the competition using
-it. If you have found an example where this is not the case, please report a
-bug.
+```sh
+cd /path/to/this/repo
+makepkg -si
+```
 
-Other aspects like latency or framerate and frame consistency are more difficult
-to quantify. Some terminal emulators also intentionally slow down to save
-resources, which might be preferred by some users.
+`makepkg` derives the package version from `git` (`<version>.r<rev>.g<commit>`),
+runs the test suite as part of `check()`, and installs via `pacman`.
 
-If you have doubts about Alacritty's performance or usability, the best way to
-quantify terminal emulators is always to test them with **your** specific
-usecases.
+> **Note:** if you export `CARGO_TARGET_DIR` globally (e.g. in `~/.zshenv`),
+> unset it for the build — the `PKGBUILD`'s `package()` step expects the binary
+> at the in-tree `target/release/alacritty`:
+> `env -u CARGO_TARGET_DIR makepkg -si`.
 
-**_Why isn't feature X implemented?_**
+### Other platforms / generic build
 
-Alacritty has many great features, but not every feature from every other
-terminal. This could be for a number of reasons, but sometimes it's just not a
-good fit for Alacritty. This means you won't find things like tabs or splits
-(which are best left to a window manager or [terminal multiplexer][tmux]) nor
-niceties like a GUI config editor.
+```sh
+cargo build --release
+# binary: ./target/release/alacritty
+```
 
-[tmux]: https://github.com/tmux/tmux
+See [`INSTALL.md`](INSTALL.md) for terminfo, desktop entry, and per-platform
+details from upstream.
+
+## Relationship to upstream
+
+This fork stays close to upstream Alacritty and merges upstream changes
+periodically. The graphics implementation intentionally diverges from kitty's
+reference in a few documented ways (no on-disk frame cache, placements dropped
+on reflow, scrolled-past placements hard-deleted, sRGB color-space conversion
+skipped, Unicode placeholder v1 only) — see
+[`docs/features.md`](./docs/features.md#known-divergences-from-kitty).
+
+For upstream Alacritty itself, its features, and its community:
+
+- Upstream repository: <https://github.com/alacritty/alacritty>
+- Upstream config docs: <https://alacritty.org/config-alacritty.html>
 
 ## License
 
-Alacritty is released under the [Apache License, Version 2.0].
+Alacritty is released under the [Apache License, Version 2.0], and this fork
+inherits that license. See [`LICENSE-APACHE`](LICENSE-APACHE) and
+[`LICENSE-MIT`](LICENSE-MIT).
 
 [Apache License, Version 2.0]: https://github.com/alacritty/alacritty/blob/master/LICENSE-APACHE
