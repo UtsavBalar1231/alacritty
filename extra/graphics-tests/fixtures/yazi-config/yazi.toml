@@ -1,0 +1,15 @@
+[manager]
+sort_by = "alphabetical"
+sort_dir_first = false
+
+[preview]
+image_filter = "nearest"
+image_quality = 50
+max_width = 600
+max_height = 900
+cache_dir = ""
+
+[plugin]
+prepend_previewers = [
+    { mime = "image/*", run = "image" },
+]
